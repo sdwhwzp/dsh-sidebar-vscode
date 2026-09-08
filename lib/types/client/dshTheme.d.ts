@@ -11,8 +11,14 @@
  */
 /**
  * Convert one resolved DSH token to the `#rrggbb[aa]` form VS Code settings take.
- * @param value - the computed token value, `rgb()`/`rgba()` or already hex.
- * @returns the hex colour, or an empty string when the value is neither.
+ *
+ * The browser does the parsing. A registered theme writes its token overrides as
+ * inline styles in whatever CSS colour form it likes, and a hand-written parser
+ * silently drops every form it does not know — which is how the background
+ * tokens went missing while the foregrounds came through.
+ *
+ * @param value - the computed token value, in any CSS colour form.
+ * @returns the hex colour, or an empty string when the browser rejects the value.
  */
 export declare function hex(value: string): string;
 /** One accepted theme payload: the colour scheme plus the chrome colours. */

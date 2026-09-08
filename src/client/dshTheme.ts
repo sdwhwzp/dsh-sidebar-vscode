@@ -46,16 +46,38 @@ const COLOR_TOKENS: readonly (readonly [string, string])[] = [
 
 const CHANNEL = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+%?))?\s*\)$/
 
+/** Canvas the browser normalizes colours through; created once, never drawn on. */
+let normalizer: CanvasRenderingContext2D | null | undefined
+
 /**
  * Convert one resolved DSH token to the `#rrggbb[aa]` form VS Code settings take.
- * @param value - the computed token value, `rgb()`/`rgba()` or already hex.
- * @returns the hex colour, or an empty string when the value is neither.
+ *
+ * The browser does the parsing. A registered theme writes its token overrides as
+ * inline styles in whatever CSS colour form it likes, and a hand-written parser
+ * silently drops every form it does not know — which is how the background
+ * tokens went missing while the foregrounds came through.
+ *
+ * @param value - the computed token value, in any CSS colour form.
+ * @returns the hex colour, or an empty string when the browser rejects the value.
  */
 export function hex(value: string): string {
   const byte = (number: number): string =>
     Math.max(0, Math.min(255, Math.round(number))).toString(16).padStart(2, '0')
+  if (normalizer === undefined) {
+    normalizer = typeof document === 'undefined' ? null : document.createElement('canvas').getContext('2d')
+  }
+  if (normalizer !== null) {
+    // A rejected assignment leaves the previous value, so the sentinel below
+    // distinguishes "the browser refused this" from "it really is that colour".
+    normalizer.fillStyle = '#010203'
+    normalizer.fillStyle = value
+    const normalized = normalizer.fillStyle
+    if (typeof normalized === 'string' && normalized !== '#010203') value = normalized
+    else if (typeof normalized === 'string' && value.trim().toLowerCase() !== '#010203') return ''
+  }
+  if (/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(value)) return value.toLowerCase()
   const parts = CHANNEL.exec(value)
-  if (parts === null) return /^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(value) ? value.toLowerCase() : ''
+  if (parts === null) return ''
   const alpha = parts[4] === undefined
     ? 'ff'
     : byte(parts[4].endsWith('%') ? Number(parts[4].slice(0, -1)) * 2.55 : Number(parts[4]) * 255)

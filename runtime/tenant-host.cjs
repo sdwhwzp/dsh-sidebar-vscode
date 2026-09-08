@@ -11,7 +11,7 @@ const { CHROME, ensureSpool, readTheme, seedGitIdentity, writeSettings } = requi
 
 function Config(value = {}) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Editor configuration must be an object')
-  const config = { launcher: '/usr/local/libexec/dsh-tenant-editor', stateRoot: '/var/lib/dsh-vsceditor', codeServerCommit: 'd2f7a122522456b351e9b3ddd39e4f3fb9fd5318', startTimeoutMs: 30000, maxInstances: 4, idleTimeoutMs: 900000, followTheme: true, hiddenChrome: ['menuBar', 'activityBar', 'statusBar'], gitIdentity: true, gitEmailDomain: 'dsh.local', spool: true, ...value }
+  const config = { launcher: '/usr/local/libexec/dsh-tenant-editor', stateRoot: '/var/lib/dsh-vsceditor', codeServerCommit: 'd2f7a122522456b351e9b3ddd39e4f3fb9fd5318', startTimeoutMs: 30000, maxInstances: 4, idleTimeoutMs: 900000, followTheme: true, hiddenChrome: ['menuBar', 'activityBar', 'statusBar', 'chat'], gitIdentity: true, gitEmailDomain: 'dsh.local', spool: true, ...value }
   if (!/^[a-f0-9]{40}$/.test(config.codeServerCommit)) throw new Error('Invalid code-server commit')
   for (const key of ['launcher', 'stateRoot']) if (typeof config[key] !== 'string' || !path.isAbsolute(config[key])) throw new Error(key + ' must be absolute')
   for (const key of ['startTimeoutMs', 'maxInstances', 'idleTimeoutMs']) if (!Number.isSafeInteger(config[key]) || config[key] < 1) throw new Error(key + ' must be positive')

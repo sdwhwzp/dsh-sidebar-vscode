@@ -29,6 +29,9 @@ const CHROME = {
   menuBar: ['window.menuBarVisibility', 'hidden'],
   activityBar: ['workbench.activityBar.location', 'hidden'],
   statusBar: ['workbench.statusBar.visible', false],
+  // The workbench's own chat reaches no DSH model, and the session it would
+  // compete with is the panel beside it.
+  chat: ['chat.disableAIFeatures', true],
 }
 
 /** Every key this plugin owns; each write removes them all before restating the current ones. */

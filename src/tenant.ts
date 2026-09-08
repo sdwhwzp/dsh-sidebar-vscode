@@ -36,6 +36,8 @@ interface TenantAccess {
 export interface TenantOptions {
   /** Editor state root; each account's workbench state lives under it. */
   readonly stateRoot: string
+  /** The runtime owns the rest of the shape and fills its own defaults. */
+  readonly [key: string]: unknown
 }
 
 /** Spool root inside one account's editor state, visible to the sandbox as `/editor-data/…`. */

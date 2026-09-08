@@ -47,6 +47,7 @@ import {
 import { installClipboardBridge } from './clipboardBridge.ts'
 import { BOOT_WINDOW_MS, fenceShouldBounce, FocusRestoreBudget } from './focusGuard.ts'
 import { parseClipboardEnvelope } from './selection.ts'
+import { themePayload } from './dshTheme.ts'
 import type { ClipboardPayload } from './selection.ts'
 import { getReferenceLander, setFallbackOptions } from './composer.tsx'
 import { extractOpenRequest, requestAddressedTo, clearTabOpenRequest, type OpenRequest } from './openIntercept.ts'
@@ -374,8 +375,8 @@ export function VscodeView(props: TabComponentProps): React.ReactNode {
     let cancelled = false
     const sessionId = scope.sessionId
     setSessionScope(sessionId)
-    const ask = async (path: string): Promise<{ ok: boolean, body: Record<string, unknown> }> => {
-      const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    const ask = async (path: string, payload = '{}'): Promise<{ ok: boolean, body: Record<string, unknown> }> => {
+      const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload })
       const body = await response.json().catch(() => null)
       return { ok: response.ok, body: (body ?? {}) as Record<string, unknown> }
     }
@@ -384,7 +385,12 @@ export function VscodeView(props: TabComponentProps): React.ReactNode {
         const status = await ask('/sidebar-vscode/api/proxy.status')
         const value = status.body.value as { tenant?: unknown } | undefined
         if (cancelled || value?.tenant !== true) return
-        const opened = await ask(`/dsh-vsceditor/open?sessionId=${encodeURIComponent(sessionId)}`)
+        // The workbench takes its colours from the account's own settings, which
+        // this call writes: without the palette the editor stops following DSH.
+        const opened = await ask(
+          `/dsh-vsceditor/open?sessionId=${encodeURIComponent(sessionId)}`,
+          JSON.stringify(themePayload()),
+        )
         const url = opened.body.url
         const folder = opened.body.folder
         if (cancelled || !opened.ok || typeof url !== 'string' || typeof folder !== 'string') return
@@ -400,6 +406,25 @@ export function VscodeView(props: TabComponentProps): React.ReactNode {
     })()
     return () => { cancelled = true; setSessionScope(undefined); tenantRef.current = null }
   }, [scope.sessionId])
+
+  // Any body attribute can carry a theme change: the built-in palette rides an
+  // attribute, a registered theme's token overrides ride inline style.
+  useEffect(() => {
+    if (tenant === null) return
+    let sent = JSON.stringify(themePayload())
+    const push = (): void => {
+      const payload = JSON.stringify(themePayload())
+      if (payload === sent) return
+      sent = payload
+      void fetch(`/dsh-vsceditor/theme?sessionId=${encodeURIComponent(scope.sessionId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: payload,
+        // A dropped update leaves the editor on its previous palette; the next change sends again.
+      }).catch(() => { sent = '' })
+    }
+    const observer = new MutationObserver(push)
+    observer.observe(document.body, { attributes: true })
+    return () => { observer.disconnect() }
+  }, [tenant, scope.sessionId])
 
   // The iframe base resolution must settle before the first load (a flip
   // afterwards would reload the workbench once).

@@ -147,7 +147,7 @@ function apply(ctx, input) {
         await settings(target, theme)
         return json(res, 200, { settings: true })
       }
-      const match = url.pathname.match(/^\/sidebar-vscode\/editor\/ide\/(session-[a-zA-Z0-9-]{1,100})\/(.*)$/)
+      const match = url.pathname.match(/^\/dsh-vsceditor\/ide\/(session-[a-zA-Z0-9-]{1,100})\/(.*)$/)
       if (!match || !SID.test(match[1])) return json(res, 404, { error: 'Not found' })
       const target = await authorize(ctx, req, match[1])
       const item = instances.get(target.owner)

@@ -8,7 +8,12 @@
  */
 const path = require('node:path')
 const { realpath } = require('node:fs/promises')
-const PREFIX = '/sidebar-vscode/editor'
+// The passwords gateway allowlists the paths it forwards, and this prefix is
+// one of its hardcoded entries — a WebSocket upgrade outside the list is never
+// forwarded, which the workbench reports only as a 1006 close. The name
+// outlives the package it came from; renaming it requires the gateway to move
+// first.
+const PREFIX = '/dsh-vsceditor'
 const SID = /^session-[a-zA-Z0-9-]{1,100}$/
 
 /** Select a persisted session inside the authenticated account's managed root. */

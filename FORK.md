@@ -26,13 +26,19 @@ merely a broken feature.
 - The built-in proxy is not mounted. The account's workbench is served by this
   package's own editor runtime (`runtime/`), which starts one code-server per
   account inside a bubblewrap sandbox on a private Unix socket and proxies it
-  at `/sidebar-vscode/editor/`, checking the principal, the session's
+  at `/dsh-vsceditor/`, checking the principal, the session's
   readability and the managed workspace root on every HTTP request and every
   WebSocket upgrade. `proxy.status` and `proxy.config` answer "not serving" so
   the browser half opens there rather than waiting for a mount.
 - Every spool method authorizes first and answers from
   `<stateRoot>/<tenant>/data/dsh-sidebar-vscode`. The folder it uses is the
   authorized one, never the value the browser named.
+
+That prefix is not this package's to choose: the passwords gateway allowlists
+the paths it forwards and carries this one as a hardcoded entry. A route outside
+the list still serves HTTP through the gateway's generic path but its WebSocket
+upgrade is dropped, which the workbench reports only as a 1006 close — the name
+therefore outlives the package it came from until the gateway moves first.
 
 `runtime/` stays CommonJS and is loaded rather than rewritten. It is the
 authorization and sandbox boundary, it was verified in production as shipped,

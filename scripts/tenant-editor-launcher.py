@@ -14,6 +14,11 @@ CONFIG = pathlib.Path('/etc/dsh-vsceditor.json')
 # nftables table dsh_sandbox filters by this group, which must be the process
 # group of every sandboxed editor.
 SANDBOX_GROUP = 'dsh-sandbox'
+# Per-account home, shared with the terminal sandbox and addressed by account id
+# rather than tenant directory name so both reach the same one. Kept out of the
+# workspace and out of the editor state: a version manager's downloads belong
+# beside neither the account's code nor the workbench's own files.
+HOME_ROOT = pathlib.Path('/var/lib/dsh-sandbox-home')
 # Resolver, CA bundle and account lookups the network needs; /etc is otherwise empty.
 NETWORK_FILES = ['/etc/resolv.conf', '/etc/hosts', '/etc/nsswitch.conf', '/etc/passwd', '/etc/group']
 
@@ -28,6 +33,30 @@ def trusted(path):
         if info.st_uid != 0 or info.st_mode & 0o022:
             raise ValueError('untrusted deployment path')
     return path
+
+
+def sandbox_home(owner, account):
+    """Create this account's sandbox home under a root-owned parent and return it."""
+    if HOME_ROOT.exists():
+        if HOME_ROOT.resolve(strict=True) != HOME_ROOT:
+            raise ValueError('noncanonical home root')
+        info = HOME_ROOT.stat()
+        if info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError('untrusted home root')
+    else:
+        HOME_ROOT.mkdir(mode=0o711)
+        os.chown(HOME_ROOT, 0, 0)
+    home = HOME_ROOT / ('u' + owner)
+    if not home.exists():
+        home.mkdir(mode=0o700)
+        os.chown(home, account.pw_uid, account.pw_gid)
+    if home.resolve(strict=True) != home:
+        raise ValueError('noncanonical account home')
+    # `~/workspace` keeps the habit of reaching the workspace from the home.
+    link = home / 'workspace'
+    if not link.exists(follow_symlinks=False):
+        link.symlink_to('/workspace')
+    return home
 
 
 def main():
@@ -67,6 +96,7 @@ def main():
         raise ValueError('invalid editor socket')
     socket.unlink(missing_ok=True)
     sandbox = grp.getgrnam(SANDBOX_GROUP)
+    home = sandbox_home(owner, account)
     network = []
     for item in NETWORK_FILES:
         if pathlib.Path(item).exists():
@@ -74,9 +104,13 @@ def main():
     args = ['/usr/bin/bwrap', '--unshare-ipc', '--unshare-pid', '--unshare-uts', '--unshare-cgroup-try', '--die-with-parent', '--clearenv',
             '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/sbin', '/sbin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
             '--proc', '/proc', '--dev', '/dev', '--perms', '1777', '--tmpfs', '/tmp', '--perms', '0755', '--dir', '/etc', '--perms', '0755', '--dir', '/opt', '--perms', '0755', '--dir', '/run',
+            # bwrap creates a missing bind parent as 0700 root, which the
+            # dropped uid cannot traverse; the home mount needs it walkable.
+            '--perms', '0755', '--dir', '/home',
             '--ro-bind', '/etc/ssl', '/etc/ssl', *network,
-            '--ro-bind', str(runtime), '/opt/code-server', '--bind', str(tenant), '/workspace', '--bind', str(data), '/editor-data', '--bind', str(run), '/run/editor', '--chdir', '/workspace',
-            '--setenv', 'HOME', '/editor-data', '--setenv', 'PATH', '/opt/code-server/lib/node:/usr/bin:/bin', '--setenv', 'LANG', 'C.UTF-8', '--setenv', 'TMPDIR', '/tmp',
+            '--ro-bind', str(runtime), '/opt/code-server', '--bind', str(tenant), '/workspace', '--bind', str(data), '/editor-data', '--bind', str(run), '/run/editor',
+            '--bind', str(home), '/home/dsh', '--chdir', '/workspace',
+            '--setenv', 'HOME', '/home/dsh', '--setenv', 'PATH', '/opt/code-server/lib/node:/usr/bin:/bin', '--setenv', 'LANG', 'C.UTF-8', '--setenv', 'TMPDIR', '/tmp',
             # The sandbox has a private /tmp, so the companion sidebar plugin's
             # command spool is addressed inside this account's editor state.
             '--setenv', 'DSH_SIDEBAR_VSCODE_SPOOL', '/editor-data/dsh-sidebar-vscode',

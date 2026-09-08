@@ -255,7 +255,7 @@ export function apply(ctx: Context, input: unknown = {}): void {
         // methods answer "not serving" so the browser half opens at the
         // account's authorized route instead of waiting for a mount.
         if ((method === 'proxy.status' || method === 'proxy.config') && proxy === undefined) {
-          writeJson(res, 200, { ok: true, value: { mounted: false, prefix: PROXY_MOUNT, serving: false } })
+          writeJson(res, 200, { ok: true, value: { mounted: false, prefix: PROXY_MOUNT, serving: false, tenant: true } })
           return
         }
         if (method === 'proxy.status' && proxy !== undefined) {

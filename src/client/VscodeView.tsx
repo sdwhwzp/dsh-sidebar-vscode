@@ -49,7 +49,7 @@ import { BOOT_WINDOW_MS, fenceShouldBounce, FocusRestoreBudget } from './focusGu
 import type { ClipboardPayload } from './selection.ts'
 import { getReferenceLander, setFallbackOptions } from './composer.tsx'
 import { extractOpenRequest, requestAddressedTo, clearTabOpenRequest, type OpenRequest } from './openIntercept.ts'
-import { beginBoot, pollBootStatus, probeCapability, sendOpenCommand } from './openChannelApi.ts'
+import { beginBoot, pollBootStatus, probeCapability, sendOpenCommand, setSessionScope } from './openChannelApi.ts'
 import { watchBootQuiet } from './bootGate.ts'
 import { t } from './i18n.ts'
 
@@ -363,10 +363,47 @@ export function VscodeView(props: TabComponentProps): React.ReactNode {
     })()
     return () => { cancelled = true; graduate?.() }
   }, [effectiveServerUrl, fullUrl])
+  // Per-account deployments serve one AUTHORIZED workbench per session and do
+  // not mount the built-in proxy, so the base is that session's route and the
+  // folder is the one the node half authorized — a locally mapped path would
+  // name whatever the browser chose, which is not an identity here.
+  const [tenant, setTenant] = useState<{ base: string, folder: string } | null>(null)
+  const tenantRef = useRef<{ base: string, folder: string } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const sessionId = scope.sessionId
+    setSessionScope(sessionId)
+    const ask = async (path: string): Promise<{ ok: boolean, body: Record<string, unknown> }> => {
+      const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+      const body = await response.json().catch(() => null)
+      return { ok: response.ok, body: (body ?? {}) as Record<string, unknown> }
+    }
+    void (async () => {
+      try {
+        const status = await ask('/sidebar-vscode/api/proxy.status')
+        const value = status.body.value as { tenant?: unknown } | undefined
+        if (cancelled || value?.tenant !== true) return
+        const opened = await ask(`/dsh-vsceditor/open?sessionId=${encodeURIComponent(sessionId)}`)
+        const url = opened.body.url
+        const folder = opened.body.folder
+        if (cancelled || !opened.ok || typeof url !== 'string' || typeof folder !== 'string') return
+        // `/dsh-vsceditor/ide/<session>/?folder=…` — the query is rebuilt by
+        // buildVscodeUrl, which appends its own separator to the base.
+        const resolved = { base: url.replace(/\/?\?.*$/, ''), folder }
+        tenantRef.current = resolved
+        setTenant(resolved)
+        setBaseState('mount')
+      } catch {
+        // Fail-soft: the single-account handshake below keeps owning the base.
+      }
+    })()
+    return () => { cancelled = true; setSessionScope(undefined); tenantRef.current = null }
+  }, [scope.sessionId])
+
   // The iframe base resolution must settle before the first load (a flip
   // afterwards would reload the workbench once).
   const resolvingBase = baseState === 'resolving'
-  const serverUrl = baseState === 'mount' ? PROXY_MOUNT : effectiveServerUrl
+  const serverUrl = tenant !== null ? tenant.base : baseState === 'mount' ? PROXY_MOUNT : effectiveServerUrl
   const pathMap = parsePathMap(readSetting(store, 'pathMap'))
 
   // Session cwd resolution: fast path via scope, authoritative via the API.
@@ -467,7 +504,9 @@ export function VscodeView(props: TabComponentProps): React.ReactNode {
 
   const executeOpen = useCallback(async (request: OpenRequest): Promise<void> => {
     const { serverUrl: base, pathMap: rules, cwd: workdir } = openInputs.current
-    const workspace = workdir !== undefined ? mapPath(workdir, rules) : undefined
+    const workspace = tenantRef.current !== null
+      ? tenantRef.current.folder
+      : workdir !== undefined ? mapPath(workdir, rules) : undefined
     // Unmapped ≠ unopenable: a path no rule matches passes through as-is
     // (same-container deployment — the workbench sees the very same file),
     // and the open channel decides existence (extension stat / VS Code's
@@ -577,11 +616,12 @@ export function VscodeView(props: TabComponentProps): React.ReactNode {
 
   // The iframe target: the pending payload URL while one is valid for the
   // current basis, else the plain folder URL.
-  const targetBasis = `${serverUrl}#${mapped ?? ''}`
+  const targetFolder = tenant !== null ? tenant.folder : mapped ?? null
+  const targetBasis = `${serverUrl}#${targetFolder ?? ''}`
   const effectivePending = pendingOpen !== null && pendingOpen.basis === targetBasis ? pendingOpen : null
   const target = effectivePending !== null
     ? effectivePending.url
-    : buildVscodeUrl(serverUrl, mapped ?? null)
+    : buildVscodeUrl(serverUrl, targetFolder)
 
   // ---- Focus guards ─────────────────────────────────────────────────────
   //
@@ -666,6 +706,7 @@ export function VscodeView(props: TabComponentProps): React.ReactNode {
   // reload. Those reloads need a fresh nonce (see the rotation below).
   const loadCountRef = useRef(0)
   const workspaceOf = useCallback((): string | null => {
+    if (tenantRef.current !== null) return tenantRef.current.folder
     const { pathMap: rules, cwd: workdir } = openInputs.current
     return workdir !== undefined ? mapPath(workdir, rules) : null
   }, [])

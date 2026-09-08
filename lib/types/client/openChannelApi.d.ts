@@ -28,6 +28,11 @@ export interface FetchLike {
         json(): Promise<unknown>;
     }>;
 }
+/**
+ * Bind the session subsequent spool calls carry.
+ * @param sessionId - the tab's current session, or undefined to clear it.
+ */
+export declare function setSessionScope(sessionId: string | undefined): void;
 /** One open command addressed to the extension serving `folder`. */
 export interface OpenCommand {
     folder: string;

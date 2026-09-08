@@ -29,6 +29,24 @@ export interface FetchLike {
 /** The default fetch binding (the browser's global). */
 const defaultFetch: FetchLike = (url, init) => fetch(url, init)
 
+/**
+ * The session every spool call is authorized against in per-account mode.
+ * The workspace folder cannot carry that: each account sees its own workspace
+ * at the same sandbox path, so the node half resolves the account from the
+ * session instead. One binding rather than a parameter on each helper —
+ * a tab renders one session at a time, and single-account deployments never
+ * set it (the node half ignores the field).
+ */
+let sessionScope: string | undefined
+
+/**
+ * Bind the session subsequent spool calls carry.
+ * @param sessionId - the tab's current session, or undefined to clear it.
+ */
+export function setSessionScope(sessionId: string | undefined): void {
+  sessionScope = sessionId
+}
+
 /** One open command addressed to the extension serving `folder`. */
 export interface OpenCommand {
   folder: string
@@ -55,7 +73,7 @@ export async function postJson(
     const response = await fetchLike(`${OPEN_CHANNEL_API}/${method}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(sessionScope === undefined ? body : { ...body, sessionId: sessionScope }),
     })
     const parsed = await response.json().catch(() => null)
     if (!response.ok || parsed === null || typeof parsed !== 'object') return null

@@ -39,17 +39,19 @@ session. Tenant mode fails to load when that package is absent.
 
 ## Status
 
-The host half is complete and covered by `tests/tenant.spec.ts` (472 tests
-total). Not yet done:
+Host half, browser half and the extension are done (472 tests). The browser half
+asks `proxy.status` once per session: a `tenant: true` answer sends it to
+`POST /dsh-vsceditor/open`, whose reply supplies both the iframe base
+(`/dsh-vsceditor/ide/<sessionId>`) and the authorized folder, and every
+open-channel call then carries that session. The extension takes its spool root
+from `DSH_SIDEBAR_VSCODE_SPOOL` (extension 0.1.4) rather than deriving it from
+`os.tmpdir()`, which a sandbox with a private /tmp cannot share with the host.
 
-1. Browser half: point the tab's iframe at `/dsh-vsceditor/ide/<sessionId>/`
-   and carry `sessionId` on every open-channel call.
-2. `dsh-vsceditor`'s launcher: set `DSH_SIDEBAR_VSCODE_SPOOL` to
-   `/editor-data/dsh-sidebar-vscode`, the sandbox's view of the account spool.
-3. The VS Code extension: read that variable instead of deriving the spool from
-   `os.tmpdir()`, and install it per tenant under the account's extensions dir.
-4. Mount `dsh-better-sidebar` in the profile (installed, not yet in `bundles`).
-5. Deploy and verify from inside the sandbox.
+Not yet done:
 
-Until 1–5 land, this fork behaves like upstream unless `tenant` is configured,
-and a `tenant`-configured entry has no working browser half.
+1. Mount `dsh-better-sidebar` in the profile (installed, not yet in `bundles`).
+2. Install extension 0.1.4 into each account's extensions directory.
+3. Deploy and verify from inside the sandbox.
+
+`dsh-vsceditor` still registers its own conversation-view tab, so both entry
+points open the same per-account instance until one is switched off.

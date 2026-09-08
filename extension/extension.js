@@ -199,9 +199,21 @@ function slugOf (folder) {
   return safe + '-' + digest.toString(16)
 }
 
+/**
+ * The spool ROOT both halves address. Per-account deployments hand it in:
+ * the sandbox has a private /tmp, so the host's spool is not reachable there,
+ * and each account's spool lives inside that account's own editor state.
+ */
+function spoolRoot () {
+  const supplied = process.env.DSH_SIDEBAR_VSCODE_SPOOL
+  return typeof supplied === 'string' && supplied.startsWith('/')
+    ? supplied
+    : nodePath.join(nodeOs.tmpdir(), 'dsh-sidebar-vscode')
+}
+
 /** The spool directory one workspace folder's channel lives in. */
 function channelDirOf (folderPath) {
-  return nodePath.join(nodeOs.tmpdir(), 'dsh-sidebar-vscode', slugOf(folderPath))
+  return nodePath.join(spoolRoot(), slugOf(folderPath))
 }
 
 /**

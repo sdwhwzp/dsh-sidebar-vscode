@@ -54,6 +54,7 @@ import {
   writeOpenCommand,
 } from './openChannel.ts'
 import { isTrustedApiRequest } from './trust-fence.ts'
+import { loadTenantAccess, readTenantOptions, resolveTenantSpool, type TenantOptions } from './tenant.ts'
 import { createVscodeProxy, parseUpstreamUrl, type ProxyPluginContext, PROXY_MOUNT } from './vscodeProxy.ts'
 
 /** Cordis plugin name (the Loader entry; matches the client bundle id). */
@@ -63,6 +64,44 @@ export const name = 'dsh-sidebar-vscode'
  * events), the webserver (command-channel routes), and the web runtime
  * (the trust fence's live trustedHosts). */
 export const inject = ['agents', 'webServer', 'webRuntime']
+
+/** Open-channel methods addressed by a spool directory, and so by an account. */
+const SPOOL_METHODS = new Set(['open.capability', 'open.embedded', 'open.request', 'boot.begin', 'boot.status'])
+
+/** Validated plugin configuration. */
+export interface PluginConfig {
+  /**
+   * Per-account editor mode. Present: every open-channel request is authorized
+   * and answered from that account's own spool, and the built-in reverse proxy
+   * stays off because it serves one shared upstream with no authorization of
+   * its own. Absent: the upstream single-account behavior.
+   */
+  readonly tenant?: TenantOptions
+}
+
+/**
+ * Validate the loader entry's config.
+ * @param value - raw config value.
+ * @returns the accepted configuration.
+ * @throws {Error} when a field is present but malformed.
+ */
+export function Config(value: unknown = {}): PluginConfig {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('dsh-sidebar-vscode configuration must be an object')
+  }
+  const tenant = readTenantOptions((value as { tenant?: unknown }).tenant)
+  return tenant === undefined ? {} : { tenant }
+}
+
+// Cordis consumes Standard Schema v1; the callable resolver stays for direct use.
+Config['~standard'] = {
+  version: 1 as const,
+  vendor: 'dsh-sidebar-vscode',
+  validate(value: unknown) {
+    try { return { value: Config(value) } }
+    catch (error) { return { issues: [{ message: error instanceof Error ? error.message : String(error) }] } }
+  },
+}
 
 /** One JSON answer over the response stream. */
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
@@ -103,7 +142,13 @@ interface HostContextFace {
  * Mount the vscode-selection pre-step boundary for every agent.
  * @param ctx - host cordis context.
  */
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, input: unknown = {}): void {
+  const config = Config(input)
+  const tenant = config.tenant
+  const tenantAccess = tenant === undefined ? undefined : loadTenantAccess()
+  if (tenant !== undefined && tenantAccess === undefined) {
+    throw new Error('dsh-sidebar-vscode: tenant mode requires dsh-vsceditor to be installed beside this plugin')
+  }
   const readFileRange = createFileRangeReader()
   // The listener lives on the agent's scope (the event is agent-scoped), so it
   // registers per created agent and withdraws with it.
@@ -130,7 +175,10 @@ export function apply(ctx: Context): void {
   // `proxy.config` route below lets the browser half push the `serverUrl`
   // setting (a full `code serve-web` URL, base path + token included) as
   // the proxy's upstream.
-  const proxy = createVscodeProxy(ctx as unknown as ProxyPluginContext)
+  // The built-in proxy serves ONE upstream and authorizes nothing, so a
+  // per-account deployment must not mount it: the account's workbench is
+  // reached through dsh-vsceditor's authorized per-session route instead.
+  const proxy = tenant === undefined ? createVscodeProxy(ctx as unknown as ProxyPluginContext) : undefined
 
   // ── Extension command channel routes ───────────────────────────────────
   // POST /sidebar-vscode/api/open.capability {folder} → {ok, value:{present}}
@@ -187,7 +235,30 @@ export function apply(ctx: Context): void {
       }
       try {
         const payload = await readJsonBody(req)
-        if (method === 'proxy.status') {
+        // Per-account mode addresses the spool by the AUTHENTICATED account:
+        // every tenant sees its own workspace at the same sandbox path, so the
+        // folder the browser names identifies nothing and is not trusted here.
+        let spool = OPEN_CHANNEL_BASE
+        let owned: string | undefined
+        if (tenant !== undefined && tenantAccess !== undefined && SPOOL_METHODS.has(method)) {
+          const claimed = (payload as { sessionId?: unknown } | null)?.sessionId
+          try {
+            const resolved = await resolveTenantSpool(tenantAccess, ctx, tenant, req, typeof claimed === 'string' ? claimed : null)
+            spool = resolved.base
+            owned = resolved.folder
+          } catch (error) {
+            writeJson(res, 403, { ok: false, error: { code: 'forbidden', message: error instanceof Error ? error.message : 'forbidden' } })
+            return
+          }
+        }
+        // The built-in proxy is absent in per-account mode; both of its
+        // methods answer "not serving" so the browser half opens at the
+        // account's authorized route instead of waiting for a mount.
+        if ((method === 'proxy.status' || method === 'proxy.config') && proxy === undefined) {
+          writeJson(res, 200, { ok: true, value: { mounted: false, prefix: PROXY_MOUNT, serving: false } })
+          return
+        }
+        if (method === 'proxy.status' && proxy !== undefined) {
           // No fields required: the browser half asks whether the built-in
           // proxy is serving, so an UNSET serverUrl can open the workbench
           // at the mount instead of the gateway-subpath default.
@@ -195,7 +266,7 @@ export function apply(ctx: Context): void {
           writeJson(res, 200, { ok: true, value: { mounted, prefix, serving } })
           return
         }
-        if (method === 'proxy.config') {
+        if (method === 'proxy.config' && proxy !== undefined) {
           const record = payload as { url?: unknown, reset?: unknown } | null
           if (record !== null && record.reset === true) {
             proxy.configure(null)
@@ -227,7 +298,7 @@ export function apply(ctx: Context): void {
             writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'folder must be a non-empty string' } })
             return
           }
-          const marker = await readCapabilityMarker(OPEN_CHANNEL_BASE, record.folder)
+          const marker = await readCapabilityMarker(spool, owned ?? record.folder)
           writeJson(res, 200, { ok: true, value: { present: marker.present, version: marker.version } })
           return
         }
@@ -241,7 +312,7 @@ export function apply(ctx: Context): void {
             writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'folder must be an absolute path' } })
             return
           }
-          await writeEmbeddedBoot(OPEN_CHANNEL_BASE, record.folder)
+          await writeEmbeddedBoot(spool, owned ?? record.folder)
           writeJson(res, 200, { ok: true })
           return
         }
@@ -251,7 +322,7 @@ export function apply(ctx: Context): void {
             writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'malformed open request' } })
             return
           }
-          await writeOpenCommand(OPEN_CHANNEL_BASE, command)
+          await writeOpenCommand(spool, owned === undefined ? command : { ...command, folder: owned })
           writeJson(res, 200, { ok: true })
           return
         }
@@ -271,7 +342,7 @@ export function apply(ctx: Context): void {
             writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'nonce must be a non-empty string of at most 128 characters' } })
             return
           }
-          await writeBootRequest(OPEN_CHANNEL_BASE, record.folder, record.nonce)
+          await writeBootRequest(spool, owned ?? record.folder, record.nonce)
           writeJson(res, 200, { ok: true })
           return
         }
@@ -285,7 +356,7 @@ export function apply(ctx: Context): void {
             writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'nonce must be a non-empty string of at most 128 characters' } })
             return
           }
-          const matched = await readBootStatus(OPEN_CHANNEL_BASE, record.folder, record.nonce)
+          const matched = await readBootStatus(spool, owned ?? record.folder, record.nonce)
           writeJson(res, 200, { ok: true, value: { matched } })
           return
         }

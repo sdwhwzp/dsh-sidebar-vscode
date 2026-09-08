@@ -39,14 +39,33 @@
  * @module dsh-sidebar-vscode
  */
 import type { Context } from '@deepseek-ai/cordis';
+import { type TenantOptions } from './tenant.ts';
 /** Cordis plugin name (the Loader entry; matches the client bundle id). */
 export declare const name = "dsh-sidebar-vscode";
 /** Services required before load: the agent registry (agent/created
  * events), the webserver (command-channel routes), and the web runtime
  * (the trust fence's live trustedHosts). */
 export declare const inject: string[];
+/** Validated plugin configuration. */
+export interface PluginConfig {
+    /**
+     * Per-account editor mode. Present: every open-channel request is authorized
+     * and answered from that account's own spool, and the built-in reverse proxy
+     * stays off because it serves one shared upstream with no authorization of
+     * its own. Absent: the upstream single-account behavior.
+     */
+    readonly tenant?: TenantOptions;
+}
+/**
+ * Validate the loader entry's config.
+ * @param value - raw config value.
+ * @returns the accepted configuration.
+ * @throws {Error} when a field is present but malformed.
+ */
+export declare function Config(value?: unknown): PluginConfig;
+export declare namespace Config { }
 /**
  * Mount the vscode-selection pre-step boundary for every agent.
  * @param ctx - host cordis context.
  */
-export declare function apply(ctx: Context): void;
+export declare function apply(ctx: Context, input?: unknown): void;

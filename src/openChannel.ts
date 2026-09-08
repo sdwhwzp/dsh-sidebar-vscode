@@ -254,3 +254,40 @@ export async function readCapabilityMarker(
     return { present: false, version: null }
   }
 }
+
+/**
+ * Drain one folder's reference queue and answer the envelopes it held.
+ *
+ * The clipboard bridge is the primary way a selection reaches the composer,
+ * but `navigator.clipboard` exists only in a secure context: over plain HTTP
+ * the workbench has no async clipboard, the bridge installs as a no-op, and a
+ * send would reach nothing. The extension therefore also publishes each
+ * envelope here. Reading CLEARS the queue, so an envelope is handed out once
+ * even when two clients poll.
+ *
+ * @param base - spool root for the account.
+ * @param folder - workspace folder the channel is addressed by.
+ * @returns the queued envelopes, oldest first; empty when the queue is absent.
+ */
+export async function takeReferences(base: string, folder: string): Promise<string[]> {
+  const file = join(base, slugOf(folder), 'refs.json')
+  let text: string
+  try { text = await readFile(file, 'utf8') }
+  // No queue yet, or the account has never sent a reference from this folder.
+  catch { return [] }
+  let items: unknown
+  try { items = (JSON.parse(text) as { items?: unknown }).items }
+  // A half-written queue is dropped rather than replayed as garbage.
+  catch { items = undefined }
+  const envelopes = Array.isArray(items)
+    ? items
+      .map(item => (item as { envelope?: unknown } | null)?.envelope)
+      .filter((value): value is string => typeof value === 'string' && value !== '')
+    : []
+  if (envelopes.length > 0) {
+    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
+    await writeFile(tmp, JSON.stringify({ v: 1, items: [] }))
+    await rename(tmp, file)
+  }
+  return envelopes
+}

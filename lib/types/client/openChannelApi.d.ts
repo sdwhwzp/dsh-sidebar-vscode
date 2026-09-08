@@ -96,3 +96,17 @@ export declare function pollBootStatus(folder: string, nonce: string, fetchLike?
  * open behavior.
  */
 export declare function fetchSettingsDocumentPath(fetchLike?: FetchLike): Promise<string | null>;
+/**
+ * Drain the workbench's reference queue for one folder.
+ *
+ * The clipboard bridge is the primary channel, but `navigator.clipboard`
+ * exists only in a secure context: over plain HTTP the workbench has none, the
+ * bridge installs as a no-op, and a send would reach nothing. The extension
+ * publishes every envelope to this queue as well; the node half clears it on
+ * read, so an envelope arrives once.
+ *
+ * @param folder - workspace folder the channel is addressed by.
+ * @param fetchLike - injectable fetch.
+ * @returns the queued envelopes, oldest first; empty on any failure.
+ */
+export declare function takeReferences(folder: string, fetchLike?: FetchLike): Promise<string[]>;

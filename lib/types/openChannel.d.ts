@@ -95,3 +95,18 @@ export declare function readCapabilityMarker(base: string, folder: string, maxAg
     present: boolean;
     version: number | null;
 }>;
+/**
+ * Drain one folder's reference queue and answer the envelopes it held.
+ *
+ * The clipboard bridge is the primary way a selection reaches the composer,
+ * but `navigator.clipboard` exists only in a secure context: over plain HTTP
+ * the workbench has no async clipboard, the bridge installs as a no-op, and a
+ * send would reach nothing. The extension therefore also publishes each
+ * envelope here. Reading CLEARS the queue, so an envelope is handed out once
+ * even when two clients poll.
+ *
+ * @param base - spool root for the account.
+ * @param folder - workspace folder the channel is addressed by.
+ * @returns the queued envelopes, oldest first; empty when the queue is absent.
+ */
+export declare function takeReferences(base: string, folder: string): Promise<string[]>;

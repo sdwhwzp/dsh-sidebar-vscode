@@ -201,3 +201,27 @@ export async function fetchSettingsDocumentPath(
   const path = (parsed.value as { path?: unknown } | null)?.path
   return typeof path === 'string' && path !== '' ? path : null
 }
+
+/**
+ * Drain the workbench's reference queue for one folder.
+ *
+ * The clipboard bridge is the primary channel, but `navigator.clipboard`
+ * exists only in a secure context: over plain HTTP the workbench has none, the
+ * bridge installs as a no-op, and a send would reach nothing. The extension
+ * publishes every envelope to this queue as well; the node half clears it on
+ * read, so an envelope arrives once.
+ *
+ * @param folder - workspace folder the channel is addressed by.
+ * @param fetchLike - injectable fetch.
+ * @returns the queued envelopes, oldest first; empty on any failure.
+ */
+export async function takeReferences(
+  folder: string,
+  fetchLike: FetchLike = defaultFetch,
+): Promise<string[]> {
+  const parsed = await postJson('ref.take', { folder }, fetchLike)
+  const value = parsed?.value as { envelopes?: unknown } | undefined
+  return Array.isArray(value?.envelopes)
+    ? value.envelopes.filter((item): item is string => typeof item === 'string' && item !== '')
+    : []
+}

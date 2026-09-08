@@ -46,10 +46,11 @@ import {
 } from './paths.ts'
 import { installClipboardBridge } from './clipboardBridge.ts'
 import { BOOT_WINDOW_MS, fenceShouldBounce, FocusRestoreBudget } from './focusGuard.ts'
+import { parseClipboardEnvelope } from './selection.ts'
 import type { ClipboardPayload } from './selection.ts'
 import { getReferenceLander, setFallbackOptions } from './composer.tsx'
 import { extractOpenRequest, requestAddressedTo, clearTabOpenRequest, type OpenRequest } from './openIntercept.ts'
-import { beginBoot, pollBootStatus, probeCapability, sendOpenCommand, setSessionScope } from './openChannelApi.ts'
+import { beginBoot, pollBootStatus, probeCapability, sendOpenCommand, setSessionScope, takeReferences } from './openChannelApi.ts'
 import { watchBootQuiet } from './bootGate.ts'
 import { t } from './i18n.ts'
 
@@ -799,13 +800,57 @@ export function VscodeView(props: TabComponentProps): React.ReactNode {
     })()
   }, [])
 
+  // Both channels can carry the same send once the page is a secure context,
+  // so a payload delivered by either is remembered briefly and the other drops
+  // it. The window is short: two genuine sends of the same selection minutes
+  // apart must both land.
+  const deliveredRef = useRef(new Map<string, number>())
+  const rememberDelivery = useCallback((payload: ClipboardPayload): void => {
+    const now = Date.now()
+    const seen = deliveredRef.current
+    for (const [key, at] of seen) if (now - at > 15000) seen.delete(key)
+    seen.set(JSON.stringify(payload), now)
+  }, [])
+  const bridgeSink = useCallback((payload: ClipboardPayload): Promise<boolean> => {
+    rememberDelivery(payload)
+    return handlePayload(payload)
+  }, [handlePayload, rememberDelivery])
+
   const installBridge = useCallback(() => {
     bridgeDisposer.current?.()
     bridgeDisposer.current = null
     const frame = iframeRef.current
     if (frame === null) return
-    bridgeDisposer.current = installClipboardBridge(frame, handlePayload)
-  }, [handlePayload])
+    bridgeDisposer.current = installClipboardBridge(frame, bridgeSink)
+  }, [bridgeSink])
+
+  // The queue the extension publishes to regardless of clipboard availability.
+  useEffect(() => {
+    if (!loaded) return
+    let cancelled = false
+    let draining = false
+    const timer = window.setInterval(() => {
+      if (cancelled || draining) return
+      const workspace = workspaceOf()
+      if (workspace === null) return
+      draining = true
+      void (async () => {
+        try {
+          for (const envelope of await takeReferences(workspace)) {
+            if (cancelled) return
+            const payload = parseClipboardEnvelope(envelope)
+            if (payload === null) continue
+            if (deliveredRef.current.has(JSON.stringify(payload))) continue
+            rememberDelivery(payload)
+            await handlePayload(payload)
+          }
+        } finally {
+          draining = false
+        }
+      })()
+    }, 700)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [loaded, workspaceOf, handlePayload, rememberDelivery])
   useEffect(() => () => {
     bridgeDisposer.current?.()
     bridgeDisposer.current = null

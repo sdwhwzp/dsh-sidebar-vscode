@@ -57,6 +57,20 @@ Deployed and verified: both plugins mount under a real `dsh --profile web`,
 `proxy.status` announces the mode, and an unauthorized session is refused by
 both this plugin's spool route and dsh-vsceditor's own.
 
+## The reference queue
+
+`navigator.clipboard` exists only in a secure context, so over plain HTTP the
+workbench has no async clipboard, the clipboard bridge installs as a no-op, and
+a "send selection" reaches nothing — silently, because the bridge's absence is
+indistinguishable from a cross-origin editor. The extension therefore also
+publishes every envelope to `refs.json` in the account's spool, and the tab
+drains it through the authorized `ref.take` route. Reading clears the queue, so
+an envelope arrives once; where both channels work, a payload delivered by
+either is remembered for fifteen seconds and the other drops it.
+
+This does not replace HTTPS. It removes the clipboard from the send path only;
+the other secure-context limitations remain.
+
 Remaining: the extension is installed per account by hand, so a NEW account
 needs it copied into its extensions directory before the file-open channel
 works there; the capability probe degrades to the URL-payload channel until

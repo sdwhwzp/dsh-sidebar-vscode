@@ -46,6 +46,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import { createFileRangeReader, vscodeMentionPreStep } from './mention.ts'
 import {
   OPEN_CHANNEL_BASE,
+  takeReferences,
   parseOpenCommand,
   readBootStatus,
   readCapabilityMarker,
@@ -74,7 +75,7 @@ export const inject = ['agents', 'webServer', 'webRuntime']
 const TENANT_SERVICES = ['connection', 'principalAccess', 'managedUserWorkspace', 'sessionQuery']
 
 /** Open-channel methods addressed by a spool directory, and so by an account. */
-const SPOOL_METHODS = new Set(['open.capability', 'open.embedded', 'open.request', 'boot.begin', 'boot.status'])
+const SPOOL_METHODS = new Set(['open.capability', 'open.embedded', 'open.request', 'boot.begin', 'boot.status', 'ref.take'])
 
 /** Validated plugin configuration. */
 export interface PluginConfig {
@@ -363,6 +364,16 @@ export function apply(ctx: Context, input: unknown = {}): void {
           }
           await writeBootRequest(spool, owned ?? record.folder, record.nonce)
           writeJson(res, 200, { ok: true })
+          return
+        }
+        if (method === 'ref.take') {
+          const record = payload as { folder?: unknown } | null
+          const folder = owned ?? (record !== null && typeof record.folder === 'string' ? record.folder : undefined)
+          if (folder === undefined || !folder.startsWith('/')) {
+            writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'folder must be an absolute path' } })
+            return
+          }
+          writeJson(res, 200, { ok: true, value: { envelopes: await takeReferences(spool, folder) } })
           return
         }
         if (method === 'boot.status') {

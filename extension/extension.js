@@ -426,6 +426,41 @@ async function reconcileBoot (dir, desired, bootNonce) {
   return report
 }
 
+/**
+ * Publish one reference envelope to this workspace's spool queue.
+ *
+ * The clipboard bridge is the primary channel, but `navigator.clipboard`
+ * exists only in a secure context: over plain HTTP the workbench has no
+ * async clipboard at all, so the bridge installs as a no-op and the send
+ * reaches nothing. This queue is the channel that does not depend on it —
+ * the client drains it and delivers the same payloads. Both channels may
+ * fire; the client drops a payload it already delivered.
+ *
+ * @param {string} folderPath workspace folder the channel is addressed by.
+ * @param {string} envelope the marker-prefixed envelope text.
+ */
+function publishReference (folderPath, envelope) {
+  try {
+    const dir = channelDirOf(folderPath)
+    nodeFs.mkdirSync(dir, { recursive: true })
+    const file = nodePath.join(dir, 'refs.json')
+    let items = []
+    try {
+      const current = JSON.parse(nodeFs.readFileSync(file, 'utf8'))
+      if (current && Array.isArray(current.items)) items = current.items
+    } catch { /* absent or half-written: the queue restarts from this send */ }
+    items.push({ at: Date.now(), envelope })
+    // A client that stopped draining must not grow the file without bound.
+    writeMarker(file, JSON.stringify({ v: 1, items: items.slice(-20) }))
+  } catch { /* best effort — the clipboard bridge remains the other path */ }
+}
+
+/** The workspace folder this window's channels are addressed by. */
+function currentFolderPath () {
+  const folders = vscode.workspace.workspaceFolders
+  return folders && folders.length > 0 ? folders[0].uri.fsPath : undefined
+}
+
 /** Best-effort atomic marker write (tmp + rename); failures are silent. */
 function writeMarker (file, value) {
   const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
@@ -712,11 +747,17 @@ function activate (context) {
       return
     }
     const envelope = `${MARKER}${toBase64Url(JSON.stringify(payload))}::\n${readableFallback(payload)}`
+    const folder = currentFolderPath()
+    if (folder !== undefined) publishReference(folder, envelope)
     try {
       await vscode.env.clipboard.writeText(envelope)
     } catch (error) {
-      void vscode.window.showErrorMessage(`DSH: 写入剪贴板失败 — ${String(error)}`)
-      return
+      // The spool queue above already carries this send; a clipboard that
+      // refuses (no secure context) is not a failure the user must see.
+      if (folder === undefined) {
+        void vscode.window.showErrorMessage(`DSH: 写入剪贴板失败 — ${String(error)}`)
+        return
+      }
     }
     const label = payload.relative || payload.path
     void vscode.window.setStatusBarMessage(`DSH: 已发送 ${label} 的选中内容`, 4000)
@@ -741,6 +782,8 @@ function activate (context) {
       return
     }
     const envelope = `${MARKER}${toBase64Url(JSON.stringify(payload))}::\n${readableResourceFallback(payload)}`
+    const folder = currentFolderPath()
+    if (folder !== undefined) publishReference(folder, envelope)
     try {
       await vscode.env.clipboard.writeText(envelope)
     } catch (error) {

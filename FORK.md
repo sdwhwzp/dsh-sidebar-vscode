@@ -47,11 +47,18 @@ open-channel call then carries that session. The extension takes its spool root
 from `DSH_SIDEBAR_VSCODE_SPOOL` (extension 0.1.4) rather than deriving it from
 `os.tmpdir()`, which a sandbox with a private /tmp cannot share with the host.
 
-Not yet done:
+The gateway services `authorize` needs are acquired through a nested inject
+rather than named in the top-level `inject`: a single-account composition has no
+passwords gateway, and listing them there leaves the whole plugin pending
+forever instead of running upstream behavior. A spool call arriving before those
+services compose is refused, never served unauthorized.
 
-1. Mount `dsh-better-sidebar` in the profile (installed, not yet in `bundles`).
-2. Install extension 0.1.4 into each account's extensions directory.
-3. Deploy and verify from inside the sandbox.
+Deployed and verified: both plugins mount under a real `dsh --profile web`,
+`proxy.status` announces the mode, and an unauthorized session is refused by
+both this plugin's spool route and dsh-vsceditor's own.
 
-`dsh-vsceditor` still registers its own conversation-view tab, so both entry
-points open the same per-account instance until one is switched off.
+Remaining: the extension is installed per account by hand, so a NEW account
+needs it copied into its extensions directory before the file-open channel
+works there; the capability probe degrades to the URL-payload channel until
+then. `dsh-vsceditor` also still registers its own conversation-view tab, so
+both entry points open the same per-account instance.

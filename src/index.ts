@@ -65,6 +65,14 @@ export const name = 'dsh-sidebar-vscode'
  * (the trust fence's live trustedHosts). */
 export const inject = ['agents', 'webServer', 'webRuntime']
 
+/**
+ * Services `tenant` mode authorizes through. They are acquired by a nested
+ * inject rather than named here: a single-account composition has no passwords
+ * gateway, and listing them at the top level would leave the whole plugin
+ * pending forever instead of running its upstream behavior.
+ */
+const TENANT_SERVICES = ['connection', 'principalAccess', 'managedUserWorkspace', 'sessionQuery']
+
 /** Open-channel methods addressed by a spool directory, and so by an account. */
 const SPOOL_METHODS = new Set(['open.capability', 'open.embedded', 'open.request', 'boot.begin', 'boot.status'])
 
@@ -148,6 +156,16 @@ export function apply(ctx: Context, input: unknown = {}): void {
   const tenantAccess = tenant === undefined ? undefined : loadTenantAccess()
   if (tenant !== undefined && tenantAccess === undefined) {
     throw new Error('dsh-sidebar-vscode: tenant mode requires dsh-vsceditor to be installed beside this plugin')
+  }
+  // The context spool calls authorize against: live only while the gateway's
+  // services are, so a request arriving before they compose is refused rather
+  // than served unauthorized.
+  let authorizing: unknown
+  if (tenant !== undefined) {
+    ctx.inject(TENANT_SERVICES, (scoped: unknown) => {
+      authorizing = scoped
+      return () => { authorizing = undefined }
+    })
   }
   const readFileRange = createFileRangeReader()
   // The listener lives on the agent's scope (the event is agent-scoped), so it
@@ -243,7 +261,8 @@ export function apply(ctx: Context, input: unknown = {}): void {
         if (tenant !== undefined && tenantAccess !== undefined && SPOOL_METHODS.has(method)) {
           const claimed = (payload as { sessionId?: unknown } | null)?.sessionId
           try {
-            const resolved = await resolveTenantSpool(tenantAccess, ctx, tenant, req, typeof claimed === 'string' ? claimed : null)
+            if (authorizing === undefined) throw new Error('the authorization services are not composed')
+            const resolved = await resolveTenantSpool(tenantAccess, authorizing, tenant, req, typeof claimed === 'string' ? claimed : null)
             spool = resolved.base
             owned = resolved.folder
           } catch (error) {

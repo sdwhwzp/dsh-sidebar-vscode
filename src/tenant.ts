@@ -7,7 +7,7 @@
  * alone. Two accounts whose sessions sit at the same sandbox path (every
  * tenant sees its workspace as `/workspace`) would share one spool, so in a
  * deployment with per-account editors the folder is not an identity. This
- * module resolves the account first — through `dsh-vsceditor`'s published
+ * module resolves the account first — through the editor runtime's
  * authorization, the single copy of those checks — and hands back that
  * account's private spool root.
  *
@@ -17,7 +17,7 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import type { IncomingMessage } from 'node:http'
 
-/** The authorization result this module consumes (dsh-vsceditor ships no types). */
+/** The authorization result this module consumes (the runtime is CommonJS, untyped). */
 interface TenantTarget {
   /** Account id of the authenticated principal. */
   readonly owner: string
@@ -27,14 +27,14 @@ interface TenantTarget {
   readonly folder: string
 }
 
-/** The slice of `dsh-vsceditor/tenant-access` this module calls. */
+/** The slice of the runtime's authorization module this module calls. */
 interface TenantAccess {
   authorize(ctx: unknown, req: IncomingMessage, sessionId: string | null): Promise<TenantTarget>
 }
 
 /** Per-account editor mode; absent leaves the upstream single-upstream behavior. */
 export interface TenantOptions {
-  /** Editor state root, matching the `stateRoot` of the dsh-vsceditor host. */
+  /** Editor state root; each account's workbench state lives under it. */
   readonly stateRoot: string
 }
 
@@ -50,11 +50,8 @@ export const TENANT_SPOOL_DIRECTORY = 'dsh-sidebar-vscode'
 export function readTenantOptions(value: unknown): TenantOptions | undefined {
   if (value === undefined || value === null) return undefined
   if (typeof value !== 'object' || Array.isArray(value)) throw new Error('tenant must be an object')
-  const stateRoot = (value as { stateRoot?: unknown }).stateRoot
-  if (typeof stateRoot !== 'string' || !stateRoot.startsWith('/')) {
-    throw new Error('tenant.stateRoot must be an absolute path')
-  }
-  return { stateRoot }
+  // The runtime owns this shape; validating it twice would let the two drift.
+  return loadEditorRuntime().host.Config(value) as TenantOptions
 }
 
 /**
@@ -82,14 +79,33 @@ export async function resolveTenantSpool(
   }
 }
 
+/** The editor runtime's two entry points this plugin drives. */
+export interface EditorRuntime {
+  readonly access: TenantAccess
+  readonly host: {
+    Config(value: unknown): unknown
+    apply(ctx: unknown, config: unknown): void
+  }
+}
+
 /**
- * Load the published authorization module.
- * @returns the module, or undefined when dsh-vsceditor is not installed beside this plugin.
+ * Load the editor runtime shipped beside this plugin. It stays CommonJS and is
+ * loaded rather than rewritten: it is the authorization and sandbox boundary,
+ * and a transcription is a defect this package cannot afford.
+ * @returns the authorization and host halves.
+ */
+export function loadEditorRuntime(): EditorRuntime {
+  const require_ = createRequire(import.meta.url)
+  return {
+    access: require_('../runtime/tenant-access.cjs') as TenantAccess,
+    host: require_('../runtime/tenant-host.cjs') as EditorRuntime['host'],
+  }
+}
+
+/**
+ * Load the authorization half alone.
+ * @returns the module.
  */
 export function loadTenantAccess(): TenantAccess | undefined {
-  const require_ = createRequire(import.meta.url)
-  try { return require_('dsh-vsceditor/tenant-access') as TenantAccess }
-  // Absent package: the composition did not install the per-account editor, and
-  // the caller reports that as a configuration error at load rather than here.
-  catch { return undefined }
+  return loadEditorRuntime().access
 }

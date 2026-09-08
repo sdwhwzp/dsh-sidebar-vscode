@@ -1,5 +1,5 @@
 import type { IncomingMessage } from 'node:http';
-/** The authorization result this module consumes (dsh-vsceditor ships no types). */
+/** The authorization result this module consumes (the runtime is CommonJS, untyped). */
 interface TenantTarget {
     /** Account id of the authenticated principal. */
     readonly owner: string;
@@ -8,13 +8,13 @@ interface TenantTarget {
     /** The session's folder as the sandbox sees it. */
     readonly folder: string;
 }
-/** The slice of `dsh-vsceditor/tenant-access` this module calls. */
+/** The slice of the runtime's authorization module this module calls. */
 interface TenantAccess {
     authorize(ctx: unknown, req: IncomingMessage, sessionId: string | null): Promise<TenantTarget>;
 }
 /** Per-account editor mode; absent leaves the upstream single-upstream behavior. */
 export interface TenantOptions {
-    /** Editor state root, matching the `stateRoot` of the dsh-vsceditor host. */
+    /** Editor state root; each account's workbench state lives under it. */
     readonly stateRoot: string;
 }
 /** Spool root inside one account's editor state, visible to the sandbox as `/editor-data/…`. */
@@ -41,9 +41,24 @@ export declare function resolveTenantSpool(access: TenantAccess, ctx: unknown, o
     folder: string;
     tenant: string;
 }>;
+/** The editor runtime's two entry points this plugin drives. */
+export interface EditorRuntime {
+    readonly access: TenantAccess;
+    readonly host: {
+        Config(value: unknown): unknown;
+        apply(ctx: unknown, config: unknown): void;
+    };
+}
 /**
- * Load the published authorization module.
- * @returns the module, or undefined when dsh-vsceditor is not installed beside this plugin.
+ * Load the editor runtime shipped beside this plugin. It stays CommonJS and is
+ * loaded rather than rewritten: it is the authorization and sandbox boundary,
+ * and a transcription is a defect this package cannot afford.
+ * @returns the authorization and host halves.
+ */
+export declare function loadEditorRuntime(): EditorRuntime;
+/**
+ * Load the authorization half alone.
+ * @returns the module.
  */
 export declare function loadTenantAccess(): TenantAccess | undefined;
 export {};

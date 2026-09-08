@@ -55,7 +55,7 @@ import {
   writeOpenCommand,
 } from './openChannel.ts'
 import { isTrustedApiRequest } from './trust-fence.ts'
-import { loadTenantAccess, readTenantOptions, resolveTenantSpool, type TenantOptions } from './tenant.ts'
+import { loadEditorRuntime, readTenantOptions, resolveTenantSpool, type TenantOptions } from './tenant.ts'
 import { createVscodeProxy, parseUpstreamUrl, type ProxyPluginContext, PROXY_MOUNT } from './vscodeProxy.ts'
 
 /** Cordis plugin name (the Loader entry; matches the client bundle id). */
@@ -154,17 +154,19 @@ interface HostContextFace {
 export function apply(ctx: Context, input: unknown = {}): void {
   const config = Config(input)
   const tenant = config.tenant
-  const tenantAccess = tenant === undefined ? undefined : loadTenantAccess()
-  if (tenant !== undefined && tenantAccess === undefined) {
-    throw new Error('dsh-sidebar-vscode: tenant mode requires dsh-vsceditor to be installed beside this plugin')
-  }
+  const runtime = tenant === undefined ? undefined : loadEditorRuntime()
+  const tenantAccess = runtime?.access
   // The context spool calls authorize against: live only while the gateway's
   // services are, so a request arriving before they compose is refused rather
   // than served unauthorized.
   let authorizing: unknown
-  if (tenant !== undefined) {
-    ctx.inject(TENANT_SERVICES, (scoped: unknown) => {
+  if (tenant !== undefined && runtime !== undefined) {
+    ctx.inject([...TENANT_SERVICES, 'webServer'], (scoped: unknown) => {
       authorizing = scoped
+      // The per-account workbench: instances, their sandbox launcher, and the
+      // authorized proxy in front of them. Mounted on the same fiber as the
+      // authorization services, so it withdraws with them.
+      runtime.host.apply(scoped, tenant)
       return () => { authorizing = undefined }
     })
   }
@@ -195,8 +197,8 @@ export function apply(ctx: Context, input: unknown = {}): void {
   // setting (a full `code serve-web` URL, base path + token included) as
   // the proxy's upstream.
   // The built-in proxy serves ONE upstream and authorizes nothing, so a
-  // per-account deployment must not mount it: the account's workbench is
-  // reached through dsh-vsceditor's authorized per-session route instead.
+  // per-account deployment must not mount it: the workbench is reached through
+  // this plugin's own authorized per-session route instead.
   const proxy = tenant === undefined ? createVscodeProxy(ctx as unknown as ProxyPluginContext) : undefined
 
   // ── Extension command channel routes ───────────────────────────────────

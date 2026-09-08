@@ -22,18 +22,23 @@ function accessFor(bySession: Record<string, { tenant: string, folder: string }>
 }
 
 describe('tenant options', () => {
-  it('accepts an absolute state root and rejects everything else', () => {
-    expect(readTenantOptions({ stateRoot: '/var/lib/dsh-vsceditor' })).toEqual({ stateRoot: '/var/lib/dsh-vsceditor' })
+  it('validates through the editor runtime and fills its defaults', () => {
+    const accepted = readTenantOptions({ stateRoot: '/var/lib/dsh-vsceditor' })
+    expect(accepted?.stateRoot).toBe('/var/lib/dsh-vsceditor')
+    // The runtime owns the shape, so its defaults arrive with it.
+    expect(accepted?.launcher).toBe('/usr/local/libexec/dsh-tenant-editor')
+    expect(accepted?.gitIdentity).toBe(true)
     expect(readTenantOptions(undefined)).toBeUndefined()
     expect(readTenantOptions(null)).toBeUndefined()
     expect(() => readTenantOptions({ stateRoot: 'relative' })).toThrow(/absolute/)
-    expect(() => readTenantOptions({})).toThrow(/absolute/)
+    expect(() => readTenantOptions({ gitEmailDomain: 'not a domain' })).toThrow(/domain/)
+    expect(() => readTenantOptions({ hiddenChrome: ['nope'] })).toThrow(/hiddenChrome/)
     expect(() => readTenantOptions([])).toThrow(/must be an object/)
   })
 
   it('is reached through the plugin config and its standard schema', () => {
     expect(Config({})).toEqual({})
-    expect(Config({ tenant: { stateRoot: '/state' } })).toEqual({ tenant: { stateRoot: '/state' } })
+    expect(Config({ tenant: { stateRoot: '/state' } }).tenant?.stateRoot).toBe('/state')
     expect(Config['~standard'].validate({ tenant: { stateRoot: 'nope' } })).toHaveProperty('issues')
     expect(Config['~standard'].validate({})).toEqual({ value: {} })
   })

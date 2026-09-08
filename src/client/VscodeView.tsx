@@ -384,11 +384,11 @@ export function VscodeView(props: TabComponentProps): React.ReactNode {
         const status = await ask('/sidebar-vscode/api/proxy.status')
         const value = status.body.value as { tenant?: unknown } | undefined
         if (cancelled || value?.tenant !== true) return
-        const opened = await ask(`/dsh-vsceditor/open?sessionId=${encodeURIComponent(sessionId)}`)
+        const opened = await ask(`/sidebar-vscode/editor/open?sessionId=${encodeURIComponent(sessionId)}`)
         const url = opened.body.url
         const folder = opened.body.folder
         if (cancelled || !opened.ok || typeof url !== 'string' || typeof folder !== 'string') return
-        // `/dsh-vsceditor/ide/<session>/?folder=…` — the query is rebuilt by
+        // `/sidebar-vscode/editor/ide/<session>/?folder=…` — the query is rebuilt by
         // buildVscodeUrl, which appends its own separator to the base.
         const resolved = { base: url.replace(/\/?\?.*$/, ''), folder }
         tenantRef.current = resolved

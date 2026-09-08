@@ -21,41 +21,31 @@ merely a broken feature.
 
 ## What the mode changes
 
-`tenant: { stateRoot }` in the loader entry turns both around:
+`tenant: { stateRoot, … }` in the loader entry turns both around:
 
-- The built-in proxy is not mounted. The account's workbench is reached through
-  `dsh-vsceditor`'s authorized per-session route, which checks the principal,
-  the session's readability and the managed workspace root on every request and
-  serves a per-account code-server inside a bwrap sandbox. `proxy.status` and
-  `proxy.config` answer "not serving" so the browser half opens there rather
-  than waiting for a mount.
+- The built-in proxy is not mounted. The account's workbench is served by this
+  package's own editor runtime (`runtime/`), which starts one code-server per
+  account inside a bubblewrap sandbox on a private Unix socket and proxies it
+  at `/sidebar-vscode/editor/`, checking the principal, the session's
+  readability and the managed workspace root on every HTTP request and every
+  WebSocket upgrade. `proxy.status` and `proxy.config` answer "not serving" so
+  the browser half opens there rather than waiting for a mount.
 - Every spool method authorizes first and answers from
   `<stateRoot>/<tenant>/data/dsh-sidebar-vscode`. The folder it uses is the
   authorized one, never the value the browser named.
 
-Authorization is `dsh-vsceditor/tenant-access`, not a second copy of the same
-checks: two plugins serving one editor must not drift on who may read which
-session. Tenant mode fails to load when that package is absent.
-
-## Status
-
-Host half, browser half and the extension are done (472 tests). The browser half
-asks `proxy.status` once per session: a `tenant: true` answer sends it to
-`POST /dsh-vsceditor/open`, whose reply supplies both the iframe base
-(`/dsh-vsceditor/ide/<sessionId>`) and the authorized folder, and every
-open-channel call then carries that session. The extension takes its spool root
-from `DSH_SIDEBAR_VSCODE_SPOOL` (extension 0.1.4) rather than deriving it from
-`os.tmpdir()`, which a sandbox with a private /tmp cannot share with the host.
+`runtime/` stays CommonJS and is loaded rather than rewritten. It is the
+authorization and sandbox boundary, it was verified in production as shipped,
+and a transcription into this package's TypeScript would be a defect class this
+plugin cannot afford. Its root-owned launcher is `scripts/tenant-editor-launcher.py`;
+sudoers pins that file by digest, so it is installed out of band and its content
+is the deployment's contract, not this package's.
 
 The gateway services `authorize` needs are acquired through a nested inject
 rather than named in the top-level `inject`: a single-account composition has no
 passwords gateway, and listing them there leaves the whole plugin pending
 forever instead of running upstream behavior. A spool call arriving before those
 services compose is refused, never served unauthorized.
-
-Deployed and verified: both plugins mount under a real `dsh --profile web`,
-`proxy.status` announces the mode, and an unauthorized session is refused by
-both this plugin's spool route and dsh-vsceditor's own.
 
 ## The reference queue
 
@@ -74,5 +64,4 @@ the other secure-context limitations remain.
 Remaining: the extension is installed per account by hand, so a NEW account
 needs it copied into its extensions directory before the file-open channel
 works there; the capability probe degrades to the URL-payload channel until
-then. `dsh-vsceditor` also still registers its own conversation-view tab, so
-both entry points open the same per-account instance.
+then.

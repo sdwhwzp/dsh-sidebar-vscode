@@ -35,6 +35,22 @@ def trusted(path):
     return path
 
 
+# Ubuntu 26.04 attaches an AppArmor profile to bwrap whose sandbox sub-profile
+# carries `audit deny capability`, which makes setpriv's setresuid fail with
+# EPERM before it can drop to the account uid. This launcher is already root and
+# builds its own confinement, so bwrap runs unconfined; the sandboxed process
+# still ends with every capability set empty and no_new_privs on. Hosts that
+# ship no such profile see no change, and hosts without aa-exec are left alone.
+AA_EXEC = '/usr/bin/aa-exec'
+
+
+def unconfined(args):
+    """Prefix the bwrap argv with the AppArmor escape this host needs."""
+    if not os.path.exists(AA_EXEC):
+        return args
+    return [AA_EXEC, '-p', 'unconfined', '--', *args]
+
+
 def git_identity(owner, extra):
     """Name for the seeded git identity.
 
@@ -135,7 +151,7 @@ def main():
     for item in NETWORK_FILES:
         if pathlib.Path(item).exists():
             network += ['--ro-bind', item, item]
-    args = ['/usr/bin/bwrap', '--unshare-ipc', '--unshare-pid', '--unshare-uts', '--unshare-cgroup-try', '--die-with-parent', '--clearenv',
+    args = unconfined(['/usr/bin/bwrap', '--unshare-ipc', '--unshare-pid', '--unshare-uts', '--unshare-cgroup-try', '--die-with-parent', '--clearenv',
             '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/sbin', '/sbin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
             '--proc', '/proc', '--dev', '/dev', '--perms', '1777', '--tmpfs', '/tmp', '--perms', '0755', '--dir', '/etc', '--perms', '0755', '--dir', '/opt', '--perms', '0755', '--dir', '/run',
             # bwrap creates a missing bind parent as 0700 root, which the
@@ -150,7 +166,7 @@ def main():
             '--setenv', 'DSH_SIDEBAR_VSCODE_SPOOL', '/editor-data/dsh-sidebar-vscode',
             '--', '/usr/bin/setpriv', '--reuid', str(account.pw_uid), '--regid', str(sandbox.gr_gid), '--clear-groups', '--no-new-privs', '--bounding-set=-all',
             '/opt/code-server/bin/code-server', '--auth', 'none', '--socket', '/run/editor/editor.sock', '--socket-mode', '0600', '--disable-telemetry', '--disable-update-check', '--disable-proxy',
-            '--user-data-dir', '/editor-data/user', '--extensions-dir', '/editor-data/extensions', '--config', '/editor-data/config.yaml', '/workspace']
+            '--user-data-dir', '/editor-data/user', '--extensions-dir', '/editor-data/extensions', '--config', '/editor-data/config.yaml', '/workspace'])
     # Keep the privileged parent outside the sandbox only to hold the launch lock.
     import subprocess
     import signal

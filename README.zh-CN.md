@@ -1,5 +1,7 @@
 # dsh-sidebar-vscode
 
+模型通过 `present` 显式交付文件时，本插件让 DSH 原生交付卡片显示文件名、说明和打开入口，即使同一轮也调用了写入工具。点击卡片仍使用当前右侧栏文件查看器。仅修改文件、没有显式交付的轮次保留插件文件改动行。
+
 [English](./README.md) · [npm](https://www.npmjs.com/package/dsh-sidebar-vscode) · [GitHub](https://github.com/chendefine/dsh-sidebar-vscode)
 
 为 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 侧边栏注册一个内嵌 **VS Code 网页版** 的标签页（[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) / DSH 插件），并把编辑器选区 / 资源管理器文件变成对话输入框里的**原子引用 chip**——提交时由 host 半展开为紧随引用消息之后的模型上下文。

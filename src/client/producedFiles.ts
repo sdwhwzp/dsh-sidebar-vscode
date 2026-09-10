@@ -79,7 +79,7 @@ export function producedForClosing(nodes: readonly unknown[], seq: number): read
 }
 
 /**
- * Claim the turn-tail chain only when the closing turn produced files —
+ * Claim modified-file turns without an explicit delivery before the closing reply —
  * the slot `select` body of the takeover (see turnTail.tsx).
  *
  * The authoritative source is the engine Turn data — the same value
@@ -102,9 +102,11 @@ export function selectProducedFiles(owner: unknown): readonly string[] | null {
   if (record === null || typeof record !== 'object') return null
   const seq = typeof record.seq === 'number' ? record.seq : Number.POSITIVE_INFINITY
   const data = record.turn?.data?.get?.('deliverables') as
-    | { produced?: unknown }
+    | { produced?: unknown; presented?: readonly { seq: number }[] }
     | null
     | undefined
+  // The native row owns explicit delivery cards, including turns that also edit files.
+  if (data?.presented?.some(file => file.seq <= seq)) return null
   if (data !== null && typeof data === 'object' && Array.isArray(data.produced)) {
     const paths: string[] = []
     const seen = new Set<string>()

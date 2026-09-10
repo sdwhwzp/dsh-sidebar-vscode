@@ -1,5 +1,7 @@
 # dsh-sidebar-vscode
 
+When the model explicitly delivers files with `present`, this plugin preserves the native DSH delivery cards with file names, descriptions, and open actions, including turns that also write files. Card clicks use the current sidebar file viewer. Modification-only turns retain the plugin’s changed-file row.
+
 [中文](./README.zh-CN.md) · [npm](https://www.npmjs.com/package/dsh-sidebar-vscode) · [GitHub](https://github.com/chendefine/dsh-sidebar-vscode)
 
 A [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) sidebar tab for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) that embeds the **VS Code web workbench**, and turns editor selections / explorer files into **atomic reference chips** in the conversation composer — expanded by the host half into model context right after the citing message on submit.

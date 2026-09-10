@@ -33,7 +33,7 @@ export declare function producedPaths(view: unknown): readonly string[];
  */
 export declare function producedForClosing(nodes: readonly unknown[], seq: number): readonly string[];
 /**
- * Claim the turn-tail chain only when the closing turn produced files —
+ * Claim modified-file turns without an explicit delivery before the closing reply —
  * the slot `select` body of the takeover (see turnTail.tsx).
  *
  * The authoritative source is the engine Turn data — the same value

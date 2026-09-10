@@ -120,6 +120,22 @@ describe('selectProducedFiles / makeTurnTailSelect (the claim)', () => {
     }
   }
 
+  it('leaves explicit deliveries to the native cards even when VSCode is the default', () => {
+    const select = makeTurnTailSelect(() => true)
+    for (const produced of [[], [{ seq: 3, path: '/w/report.md' }]]) {
+      const data = { produced, presented: [{ seq: 5, index: 0, path: '/w/report.md', description: 'Report' }] }
+      expect(select({ turn: { data: { get: () => data } }, seq: 6 })).toBeNull()
+    }
+  })
+
+  it('keeps modification-only turns and replies before a later delivery on the VSCode row', () => {
+    const select = makeTurnTailSelect(() => true)
+    for (const presented of [[], [{ seq: 8, index: 0, path: '/w/report.md' }]]) {
+      const data = { produced: [{ seq: 3, path: '/w/report.md' }], presented }
+      expect(select({ turn: { data: { get: () => data } }, seq: 6 })).toEqual({ paths: ['/w/report.md'] })
+    }
+  })
+
   it('claims from the engine Turn data (the authoritative source)', () => {
     expect(selectProducedFiles(turnOwner([
       { seq: 3, path: '/w/a.ts' },

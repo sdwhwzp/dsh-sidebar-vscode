@@ -8,7 +8,7 @@
  * instead of the built-in editor tab.
  *
  * When the gate declines (the `openAsDefault` switch off, the VSCode tab
- * type disabled, or the turn produced nothing) the select returns null and
+ * type disabled, the turn contains an explicit delivery, or it produced nothing) the select returns null and
  * the chain falls through untouched — better-sidebar's -1 entry, then the
  * default deliverables row — so switch-off keeps the stock behavior.
  *

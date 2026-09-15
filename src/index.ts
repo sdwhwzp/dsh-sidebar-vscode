@@ -174,7 +174,7 @@ export function apply(ctx: Context, input: unknown = {}): void {
   // The listener lives on the agent's scope (the event is agent-scoped), so it
   // registers per created agent and withdraws with it.
   /* v8 ignore start -- agent-scoped registration glue; the boundary behavior is vscodeMentionPreStep (unit-tested) and the event plumbing is harness-owned. */
-  ctx.on('agent/created', ({ agent }) => {
+  ctx.on('agent/created', ({ agent }): undefined => {
     agent.ctx.effect(() => {
       const stop = agent.ctx.on('agent/pre-step', async ({ messages, signal }, next) => {
         return vscodeMentionPreStep(

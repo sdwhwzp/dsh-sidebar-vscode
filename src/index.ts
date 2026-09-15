@@ -1,10 +1,11 @@
 /**
- * `dsh-sidebar-vscode`, node half: the vscode-selection context boundary
- * plus the extension command channel's two fenced routes.
+ * `dsh-sidebar-vscode`, node half: the vscode-selection context boundary,
+ * the extension command channel's fenced routes, the `vscode-sidebar`
+ * settings section, and the same-origin VS Code reverse proxy.
  *
- * Everything UI-shaped (the better-sidebar VS Code tab, the composer
- * chips, the reference rail, the chat-open interception) lives in the
- * browser half. This half owns:
+ * Everything UI-shaped (the official right-Sidebar `vscode` tab, the
+ * composer chips, the reference rail, the chat-open interception, the
+ * settings card) lives in the browser half. This half owns:
  *
  * - the model-facing seam: for every live agent it listens at
  *   `agent/pre-step`, expands canonical `dsh-vscode:` (editor selections)
@@ -14,18 +15,19 @@
  *   resources, content-less `<file-selection>`/`<folder-selection>`
  *   markers sourced `{ kind: 'vscode-resource', … }` (see `src/mention.ts`);
  *
- * - `/sidebar-vscode/api/open.capability` + `/open.request`: the spool the
- *   embedded workbench's extension polls (see `src/openChannel.ts`), fenced
- *   by the same browser-trust rules as every other plugin route; the
- *   `boot.begin` / `boot.status` pair rides the same fence to gate the
- *   iframe reveal on the extension's post-reconcile boot receipt;
+ * - the `vscode-sidebar` settings section (`src/settingsSection.ts`),
+ *   registered on the settings provider so the official「插件配置」tab
+ *   serves the namespace this plugin's browser card edits;
  *
- * - `/sidebar-vscode/api/settings.document`: locates the settings provider's
- *   local document (prepareDocument) for the browser-half takeover of the
- *   settings page's「打开配置文件」button — the stock /api method opens it
- *   with the Host OS opener (dead on headless containers) and never reveals
- *   the path; this route hands the path to this plugin's own fenced channel
- *   so the file can open inside the embedded VS Code instead.
+ * - the fenced route family under `/sidebar-vscode/api/*`, dispatched
+ *   through one method table (METHODS below): the open-channel probes and
+ *   commands (`open.capability` / `open.request` / `open.embedded`), the
+ *   boot gate pair (`boot.begin` / `boot.status`) that gates the iframe
+ *   reveal on the extension's post-reconcile boot receipt, the proxy
+ *   control plane (`proxy.config` / `proxy.status`), and the settings
+ *   document locator (`settings.document`) for the browser-half takeover
+ *   of the settings page's「打开配置文件」button — all behind the same
+ *   browser-trust fence as every other plugin route;
  *
  * - the same-origin VS Code reverse proxy (see `src/vscodeProxy.ts`),
  *   mounted at `/sidebar/vscode`: an HTTP prefix route plus the discovered
@@ -44,19 +46,29 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 // Type-only: brings the agent event and PreStepDecision declarations in.
 import type {} from '@deepseek-ai/dsh-agent'
 import { createFileRangeReader, vscodeMentionPreStep } from './mention.ts'
+import { installVscodeSidebarSettings } from './settingsSection.ts'
 import {
   OPEN_CHANNEL_BASE,
   takeReferences,
   parseOpenCommand,
+  readBootLedger,
   readBootStatus,
   readCapabilityMarker,
   writeBootRequest,
   writeEmbeddedBoot,
   writeOpenCommand,
+  writeUserInteract,
 } from './openChannel.ts'
+import { NONCE_MAX_LENGTH } from './shared/protocol.ts'
 import { isTrustedApiRequest } from './trust-fence.ts'
+import {
+  createVscodeProxy,
+  parseUpstreamUrl,
+  type ProxyPluginContext,
+  type VscodeProxyHandle,
+  PROXY_MOUNT,
+} from './vscodeProxy.ts'
 import { loadEditorRuntime, readTenantOptions, resolveTenantSpool, type TenantOptions } from './tenant.ts'
-import { createVscodeProxy, parseUpstreamUrl, type ProxyPluginContext, PROXY_MOUNT } from './vscodeProxy.ts'
 
 /** Cordis plugin name (the Loader entry; matches the client bundle id). */
 export const name = 'dsh-sidebar-vscode'
@@ -75,7 +87,7 @@ export const inject = ['agents', 'webServer', 'webRuntime']
 const TENANT_SERVICES = ['connection', 'principalAccess', 'managedUserWorkspace', 'sessionQuery']
 
 /** Open-channel methods addressed by a spool directory, and so by an account. */
-const SPOOL_METHODS = new Set(['open.capability', 'open.embedded', 'open.request', 'boot.begin', 'boot.status', 'ref.take'])
+const SPOOL_METHODS = new Set(['open.capability', 'open.embedded', 'open.request', 'boot.begin', 'boot.status', 'boot.interact', 'ref.take'])
 
 /** Validated plugin configuration. */
 export interface PluginConfig {
@@ -111,12 +123,19 @@ Config['~standard'] = {
     catch (error) { return { issues: [{ message: error instanceof Error ? error.message : String(error) }] } }
   },
 }
+/** The route family this half owns on the webserver. */
+const API_PREFIX = '/sidebar-vscode/api/'
 
 /** One JSON answer over the response stream. */
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body)
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
   res.end(payload)
+}
+
+/** The error answer every route failure renders as. */
+function errorBody(code: string, message: string): { ok: false, error: { code: string, message: string } } {
+  return { ok: false, error: { code, message } }
 }
 
 /** Read one request body as JSON, capped (the payloads are tiny). */
@@ -145,6 +164,169 @@ interface HostContextFace {
   webRuntime: { trustedHosts: readonly string[] }
   /** The settings provider face this plugin reads (prepareDocument only). */
   get(name: 'settings'): { prepareDocument(): Promise<string | undefined> } | undefined
+}
+
+// ---- the route method table ────────────────────────────────────────────────
+//
+// One entry per POST method under the prefix: it validates its own payload
+// (throwing ApiError for client errors) and resolves to the `value` of the
+// `{ok: true, value}` envelope — or undefined for a bare `{ok: true}`. The
+// dispatcher owns everything mechanical: the fence, the method lookup, body
+// reading, and error shaping — adding a route is adding one entry here.
+
+/** A client-error answer the dispatcher renders with its status and code. */
+class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
+/** The per-call services the methods touch. */
+interface MethodTools {
+  proxy: VscodeProxyHandle | undefined
+  spool: string
+  settings: { prepareDocument(): Promise<string | undefined> } | undefined
+}
+
+/** One route method: validate the payload, resolve the envelope `value`. */
+type ApiMethod = (payload: unknown, tools: MethodTools) => Promise<unknown>
+
+/** The request body as a record (a non-object body reads as empty). */
+function asRecord(payload: unknown): Record<string, unknown> {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return {}
+  return payload as Record<string, unknown>
+}
+
+/** The `folder` field of one open-channel probe (non-empty string). */
+function folderField(payload: unknown): string {
+  const folder = asRecord(payload).folder
+  if (typeof folder !== 'string' || folder === '') {
+    throw new ApiError(400, 'bad-request', 'folder must be a non-empty string')
+  }
+  return folder
+}
+
+/** The `folder` + `nonce` pair the boot-gate routes both require. */
+function bootFields(payload: unknown): { folder: string, nonce: string } {
+  const { folder, nonce } = asRecord(payload)
+  if (typeof folder !== 'string' || !folder.startsWith('/')) {
+    throw new ApiError(400, 'bad-request', 'folder must be an absolute path')
+  }
+  if (typeof nonce !== 'string' || nonce === '' || nonce.length > NONCE_MAX_LENGTH) {
+    throw new ApiError(400, 'bad-request', `nonce must be a non-empty string of at most ${NONCE_MAX_LENGTH} characters`)
+  }
+  return { folder, nonce }
+}
+
+/** The absolute `folder` field of the embedded-boot stamp. */
+function absoluteFolderField(payload: unknown): string {
+  const folder = asRecord(payload).folder
+  if (typeof folder !== 'string' || !folder.startsWith('/')) {
+    throw new ApiError(400, 'bad-request', 'folder must be an absolute path')
+  }
+  return folder
+}
+
+/**
+ * The method table. See the module doc for the route family's purpose;
+ * each body is the exact behavior of the long if-chain it replaces.
+ */
+const METHODS: Record<string, ApiMethod> = {
+  'proxy.status': async (_payload, { proxy }) => proxy?.status() ?? { mounted: false, prefix: PROXY_MOUNT, serving: false, tenant: true },
+
+  'proxy.config': async (payload, { proxy }) => {
+    if (proxy === undefined) return { mounted: false, prefix: PROXY_MOUNT, serving: false, tenant: true }
+    const record = asRecord(payload)
+    if (record.reset === true) {
+      proxy.configure(null)
+      return { mounted: null }
+    }
+    if (typeof record.url !== 'string' || record.url.trim() === '') {
+      throw new ApiError(400, 'bad-request', 'url must be a non-empty string (or {"reset":true})')
+    }
+    const config = parseUpstreamUrl(record.url)
+    if (config === null) {
+      throw new ApiError(400, 'bad-upstream', 'url must be an http(s) URL without embedded credentials — the full address code serve-web prints, base path and query included')
+    }
+    // Bounded liveness probe BEFORE adopting: the browser half falls back
+    // to the direct cross-origin iframe when the DSH host cannot reach the
+    // pasted address (e.g. a remote serve-web). The fetched page doubles
+    // as the discovery seed, so the adopt below does not refetch it.
+    const fetched = await proxy.probeUpstream(config)
+    proxy.configure(config, fetched ?? undefined)
+    return { mounted: `${PROXY_MOUNT}/`, reachable: fetched !== null }
+  },
+
+  // The settings-document locator: the settings button takeover needs the
+  // Host-side absolute path the stock /api method deliberately withholds
+  // from the browser. No body is read (nothing to validate), and the
+  // answer only rides the same fenced same-origin route family as the
+  // open channel — the path names a document whose existence the settings
+  // provider itself guarantees (prepareDocument materializes it).
+  'settings.document': async (_payload, { settings }) => {
+    if (settings === undefined) {
+      throw new ApiError(500, 'settings-absent', 'settings service is absent: this deployment does not mount a settings provider (e.g. @deepseek-ai/dsh-settings-file) in its composition')
+    }
+    let path: string | undefined
+    try {
+      path = await settings.prepareDocument()
+    } catch (error) {
+      throw new ApiError(500, 'internal', `settings document preparation failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (path === undefined || path === '') {
+      throw new ApiError(500, 'no-document', 'settings provider has no local document to open')
+    }
+    return { path }
+  },
+
+  'open.capability': async (payload, { spool }) => {
+    const folder = folderField(payload)
+    const marker = await readCapabilityMarker(spool, folder)
+    return { present: marker.present, version: marker.version }
+  },
+
+  'open.embedded': async (payload, { spool }) => {
+    const folder = absoluteFolderField(payload)
+    await writeEmbeddedBoot(spool, folder)
+    return undefined
+  },
+
+  'open.request': async (payload, { spool }) => {
+    const command = parseOpenCommand(payload)
+    if (command === null) {
+      throw new ApiError(400, 'bad-request', 'malformed open request')
+    }
+    await writeOpenCommand(spool, command)
+    return undefined
+  },
+
+  'boot.begin': async (payload, { spool }) => {
+    const { folder, nonce } = bootFields(payload)
+    await writeBootRequest(spool, folder, nonce)
+    // The park-time ledger rides along: the client's DOM-quiet reveal
+    // racer keeps the frame hidden while the live tab strip mismatches it
+    // (a ghost VS Code's restore replayed that the reconcile has not
+    // closed yet). Null = no ledger (first-ever boot: nothing reconciles).
+    return { editors: await readBootLedger(spool, folder) }
+  },
+
+  'boot.status': async (payload, { spool }) => {
+    const { folder, nonce } = bootFields(payload)
+    const matched = await readBootStatus(spool, folder, nonce)
+    return { matched }
+  },
+
+  'ref.take': async (payload, { spool }) => ({ envelopes: await takeReferences(spool, absoluteFolderField(payload)) }),
+
+  'boot.interact': async (payload, { spool }) => {
+    const { folder, nonce } = bootFields(payload)
+    await writeUserInteract(spool, folder, nonce)
+    return undefined
+  },
 }
 
 /**
@@ -187,13 +369,26 @@ export function apply(ctx: Context, input: unknown = {}): void {
       })
       return () => { stop() }
     }, 'dsh-sidebar-vscode: vscode-mention contexts')
+    // The event contract types the listener's return as `undefined`
+    // (newer cordis builds); a block body alone infers `void`.
+    return undefined
   })
   /* v8 ignore stop */
+
+  // ── The `vscode-sidebar` settings section ──────────────────────────────
+  // The official「插件配置」card tab pairs the namespaces the Host serves
+  // with the browser-registered cards, so this registration is what makes
+  // the plugin's card appear (设置 → 插件 → 插件配置 → VSCode 侧边栏).
+  // Fail-soft: a deployment without a settings provider never serves the
+  // namespace (no card), and the browser half falls back to code defaults.
+  ctx.inject(['settings'], settingsCtx => {
+    installVscodeSidebarSettings(ctx, settingsCtx.get('settings'))
+  })
 
   // ── Same-origin /vscode reverse proxy ──────────────────────────────────
   // Probe-gated and fail-soft: an unreachable or conflicting upstream only
   // logs, never failing plugin activation (see vscodeProxy.ts). The
-  // `proxy.config` route below lets the browser half push the `serverUrl`
+  // `proxy.config` route lets the browser half push the `serverUrl`
   // setting (a full `code serve-web` URL, base path + token included) as
   // the proxy's upstream.
   // The built-in proxy serves ONE upstream and authorizes nothing, so a
@@ -201,10 +396,7 @@ export function apply(ctx: Context, input: unknown = {}): void {
   // this plugin's own authorized per-session route instead.
   const proxy = tenant === undefined ? createVscodeProxy(ctx as unknown as ProxyPluginContext) : undefined
 
-  // ── Extension command channel routes ───────────────────────────────────
-  // POST /sidebar-vscode/api/open.capability {folder} → {ok, value:{present}}
-  // POST /sidebar-vscode/api/open.request   {folder, path, nonce, …} → {ok}
-  // POST /sidebar-vscode/api/settings.document (no body) → {ok, value:{path}}
+  // ── The fenced route family (method-table dispatch) ────────────────────
   // Fenced like every other plugin route (browser-trust fence over the
   // live trustedHosts); a cross-site page cannot reach them.
   const host = ctx as unknown as HostContextFace
@@ -213,52 +405,26 @@ export function apply(ctx: Context, input: unknown = {}): void {
     path: '/sidebar-vscode/api',
     handler: async (req, res) => {
       if (!isTrustedApiRequest(req, host.webRuntime.trustedHosts)) {
-        writeJson(res, 403, { ok: false, error: { code: 'forbidden', message: 'forbidden' } })
+        writeJson(res, 403, errorBody('forbidden', 'forbidden'))
         return
       }
       if (req.method !== 'POST') {
-        writeJson(res, 405, { ok: false, error: { code: 'method-error', message: 'method not allowed' } })
+        writeJson(res, 405, errorBody('method-error', 'method not allowed'))
         return
       }
       const pathname = new URL(req.url ?? '/', 'http://dsh.internal').pathname
-      const method = pathname.startsWith('/sidebar-vscode/api/')
-        ? pathname.slice('/sidebar-vscode/api/'.length)
-        : undefined
+      const method = pathname.startsWith(API_PREFIX) ? pathname.slice(API_PREFIX.length) : undefined
       if (method === undefined || method.includes('/')) {
-        writeJson(res, 404, { ok: false, error: { code: 'not-found', message: 'unknown method' } })
+        writeJson(res, 404, errorBody('not-found', 'unknown method'))
         return
       }
-      // The settings-document locator: the settings button takeover needs the
-      // Host-side absolute path the stock /api method deliberately withholds
-      // from the browser. No body is read (nothing to validate), and the
-      // answer only rides the same fenced same-origin route family as the
-      // open channel — the path names a document whose existence the settings
-      // provider itself guarantees (prepareDocument materializes it).
-      if (method === 'settings.document') {
-        const settings = host.get('settings')
-        if (settings === undefined) {
-          writeJson(res, 500, { ok: false, error: { code: 'settings-absent', message: 'settings service is absent: this deployment does not mount a settings provider (e.g. @deepseek-ai/dsh-settings-file) in its composition' } })
-          return
-        }
-        let path: string | undefined
-        try {
-          path = await settings.prepareDocument()
-        } catch (error) {
-          writeJson(res, 500, { ok: false, error: { code: 'internal', message: `settings document preparation failed: ${error instanceof Error ? error.message : String(error)}` } })
-          return
-        }
-        if (path === undefined || path === '') {
-          writeJson(res, 500, { ok: false, error: { code: 'no-document', message: 'settings provider has no local document to open' } })
-          return
-        }
-        writeJson(res, 200, { ok: true, value: { path } })
+      const entry = METHODS[method]
+      if (entry === undefined) {
+        writeJson(res, 404, errorBody('not-found', `unknown method "${method}"`))
         return
       }
       try {
-        const payload = await readJsonBody(req)
-        // Per-account mode addresses the spool by the AUTHENTICATED account:
-        // every tenant sees its own workspace at the same sandbox path, so the
-        // folder the browser names identifies nothing and is not trusted here.
+        let payload = method === 'settings.document' ? null : await readJsonBody(req)
         let spool = OPEN_CHANNEL_BASE
         let owned: string | undefined
         if (tenant !== undefined && tenantAccess !== undefined && SPOOL_METHODS.has(method)) {
@@ -280,121 +446,15 @@ export function apply(ctx: Context, input: unknown = {}): void {
           writeJson(res, 200, { ok: true, value: { mounted: false, prefix: PROXY_MOUNT, serving: false, tenant: true } })
           return
         }
-        if (method === 'proxy.status' && proxy !== undefined) {
-          // No fields required: the browser half asks whether the built-in
-          // proxy is serving, so an UNSET serverUrl can open the workbench
-          // at the mount instead of the gateway-subpath default.
-          const { mounted, prefix, serving } = proxy.status()
-          writeJson(res, 200, { ok: true, value: { mounted, prefix, serving } })
-          return
-        }
-        if (method === 'proxy.config' && proxy !== undefined) {
-          const record = payload as { url?: unknown, reset?: unknown } | null
-          if (record !== null && record.reset === true) {
-            proxy.configure(null)
-            writeJson(res, 200, { ok: true, value: { mounted: null } })
-            return
-          }
-          if (record === null || typeof record.url !== 'string' || record.url.trim() === '') {
-            writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'url must be a non-empty string (or {"reset":true})' } })
-            return
-          }
-          const config = parseUpstreamUrl(record.url)
-          if (config === null) {
-            writeJson(res, 400, { ok: false, error: { code: 'bad-upstream', message: 'url must be an http(s) URL without embedded credentials — the full address code serve-web prints, base path and query included' } })
-            return
-          }
-          // Bounded liveness probe BEFORE adopting: the browser half falls
-          // back to the direct cross-origin iframe when the DSH host
-          // cannot reach the pasted address (e.g. a remote serve-web).
-          // The fetched page doubles as the discovery seed, so the adopt
-          // below does not refetch it.
-          const fetched = await proxy.probeUpstream(config)
-          proxy.configure(config, fetched ?? undefined)
-          writeJson(res, 200, { ok: true, value: { mounted: `${PROXY_MOUNT}/`, reachable: fetched !== null } })
-          return
-        }
-        if (method === 'open.capability') {
-          const record = payload as { folder?: unknown } | null
-          if (record === null || typeof record.folder !== 'string' || record.folder === '') {
-            writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'folder must be a non-empty string' } })
-            return
-          }
-          const marker = await readCapabilityMarker(spool, owned ?? record.folder)
-          writeJson(res, 200, { ok: true, value: { present: marker.present, version: marker.version } })
-          return
-        }
-        if (method === 'open.embedded') {
-          // The sidebar's workbench iframe just loaded for this folder:
-          // stamp the embedded-boot marker the extension reads at
-          // activation (a fresh stamp = an EMBEDDED boot, which starts
-          // with a clean editor area — see writeEmbeddedBoot).
-          const record = payload as { folder?: unknown } | null
-          if (record === null || typeof record.folder !== 'string' || !record.folder.startsWith('/')) {
-            writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'folder must be an absolute path' } })
-            return
-          }
-          await writeEmbeddedBoot(spool, owned ?? record.folder)
-          writeJson(res, 200, { ok: true })
-          return
-        }
-        if (method === 'open.request') {
-          const command = parseOpenCommand(payload)
-          if (command === null) {
-            writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'malformed open request' } })
-            return
-          }
-          await writeOpenCommand(spool, owned === undefined ? command : { ...command, folder: owned })
-          writeJson(res, 200, { ok: true })
-          return
-        }
-        if (method === 'boot.begin') {
-          // The sidebar's client parks one boot nonce BEFORE mounting the
-          // workbench iframe; the extension (≥ 0.1.2) echoes it in its
-          // post-reconcile boot.json receipt, and boot.status reports the
-          // match — the client keeps the iframe hidden (opacity 0) until
-          // then, so a reconciled editor area is the FIRST thing the user
-          // sees: restored-but-closed ghost files never visibly open.
-          const record = payload as { folder?: unknown, nonce?: unknown } | null
-          if (record === null || typeof record.folder !== 'string' || !record.folder.startsWith('/')) {
-            writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'folder must be an absolute path' } })
-            return
-          }
-          if (typeof record.nonce !== 'string' || record.nonce === '' || record.nonce.length > 128) {
-            writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'nonce must be a non-empty string of at most 128 characters' } })
-            return
-          }
-          await writeBootRequest(spool, owned ?? record.folder, record.nonce)
-          writeJson(res, 200, { ok: true })
-          return
-        }
-        if (method === 'ref.take') {
-          const record = payload as { folder?: unknown } | null
-          const folder = owned ?? (record !== null && typeof record.folder === 'string' ? record.folder : undefined)
-          if (folder === undefined || !folder.startsWith('/')) {
-            writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'folder must be an absolute path' } })
-            return
-          }
-          writeJson(res, 200, { ok: true, value: { envelopes: await takeReferences(spool, folder) } })
-          return
-        }
-        if (method === 'boot.status') {
-          const record = payload as { folder?: unknown, nonce?: unknown } | null
-          if (record === null || typeof record.folder !== 'string' || !record.folder.startsWith('/')) {
-            writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'folder must be an absolute path' } })
-            return
-          }
-          if (typeof record.nonce !== 'string' || record.nonce === '' || record.nonce.length > 128) {
-            writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'nonce must be a non-empty string of at most 128 characters' } })
-            return
-          }
-          const matched = await readBootStatus(spool, owned ?? record.folder, record.nonce)
-          writeJson(res, 200, { ok: true, value: { matched } })
-          return
-        }
-        writeJson(res, 404, { ok: false, error: { code: 'not-found', message: `unknown method "${method}"` } })
+        if (owned !== undefined) payload = { ...asRecord(payload), folder: owned }
+        const value = await entry(payload, { proxy, settings: host.get('settings'), spool })
+        writeJson(res, 200, value === undefined ? { ok: true } : { ok: true, value })
       } catch (error) {
-        writeJson(res, 500, { ok: false, error: { code: 'internal', message: error instanceof Error ? error.message : String(error) } })
+        if (error instanceof ApiError) {
+          writeJson(res, error.status, errorBody(error.code, error.message))
+          return
+        }
+        writeJson(res, 500, errorBody('internal', error instanceof Error ? error.message : String(error)))
       }
     },
   }), 'dsh-sidebar-vscode: /sidebar-vscode/api routes')

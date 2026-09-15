@@ -1,10 +1,11 @@
 /**
- * `dsh-sidebar-vscode`, node half: the vscode-selection context boundary
- * plus the extension command channel's two fenced routes.
+ * `dsh-sidebar-vscode`, node half: the vscode-selection context boundary,
+ * the extension command channel's fenced routes, the `vscode-sidebar`
+ * settings section, and the same-origin VS Code reverse proxy.
  *
- * Everything UI-shaped (the better-sidebar VS Code tab, the composer
- * chips, the reference rail, the chat-open interception) lives in the
- * browser half. This half owns:
+ * Everything UI-shaped (the official right-Sidebar `vscode` tab, the
+ * composer chips, the reference rail, the chat-open interception, the
+ * settings card) lives in the browser half. This half owns:
  *
  * - the model-facing seam: for every live agent it listens at
  *   `agent/pre-step`, expands canonical `dsh-vscode:` (editor selections)
@@ -14,18 +15,19 @@
  *   resources, content-less `<file-selection>`/`<folder-selection>`
  *   markers sourced `{ kind: 'vscode-resource', … }` (see `src/mention.ts`);
  *
- * - `/sidebar-vscode/api/open.capability` + `/open.request`: the spool the
- *   embedded workbench's extension polls (see `src/openChannel.ts`), fenced
- *   by the same browser-trust rules as every other plugin route; the
- *   `boot.begin` / `boot.status` pair rides the same fence to gate the
- *   iframe reveal on the extension's post-reconcile boot receipt;
+ * - the `vscode-sidebar` settings section (`src/settingsSection.ts`),
+ *   registered on the settings provider so the official「插件配置」tab
+ *   serves the namespace this plugin's browser card edits;
  *
- * - `/sidebar-vscode/api/settings.document`: locates the settings provider's
- *   local document (prepareDocument) for the browser-half takeover of the
- *   settings page's「打开配置文件」button — the stock /api method opens it
- *   with the Host OS opener (dead on headless containers) and never reveals
- *   the path; this route hands the path to this plugin's own fenced channel
- *   so the file can open inside the embedded VS Code instead.
+ * - the fenced route family under `/sidebar-vscode/api/*`, dispatched
+ *   through one method table (METHODS below): the open-channel probes and
+ *   commands (`open.capability` / `open.request` / `open.embedded`), the
+ *   boot gate pair (`boot.begin` / `boot.status`) that gates the iframe
+ *   reveal on the extension's post-reconcile boot receipt, the proxy
+ *   control plane (`proxy.config` / `proxy.status`), and the settings
+ *   document locator (`settings.document`) for the browser-half takeover
+ *   of the settings page's「打开配置文件」button — all behind the same
+ *   browser-trust fence as every other plugin route;
  *
  * - the same-origin VS Code reverse proxy (see `src/vscodeProxy.ts`),
  *   mounted at `/sidebar/vscode`: an HTTP prefix route plus the discovered

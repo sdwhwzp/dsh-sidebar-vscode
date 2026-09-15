@@ -71,3 +71,9 @@ Remaining: the extension is installed per account by hand, so a NEW account
 needs it copied into its extensions directory before the file-open channel
 works there; the capability probe degrades to the URL-payload channel until
 then.
+
+## 2026-09-15 source synchronization
+
+The deployment branch includes source v0.3.2 (`f383228`). The official right Sidebar owns the VS Code tab; its persistent workbench survives switching tabs. Tenant workbench launch, account-specific spool paths, reference delivery and theme synchronization remain enabled. The new `boot.interact` route uses the same session authorization as every other spool operation. Native file-delivery cards remain available.
+
+The extension uses the source modular implementation; its filesystem helper honors the launcher-supplied account spool, and its envelope helper also publishes the reference queue. The packaged runtime continues to enforce the account workspace for HTTP and WebSocket access.

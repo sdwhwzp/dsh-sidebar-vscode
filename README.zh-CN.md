@@ -4,7 +4,7 @@
 
 [English](./README.md) · [npm](https://www.npmjs.com/package/dsh-sidebar-vscode) · [GitHub](https://github.com/chendefine/dsh-sidebar-vscode)
 
-为 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 侧边栏注册一个内嵌 **VS Code 网页版** 的标签页（[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) / DSH 插件），并把编辑器选区 / 资源管理器文件变成对话输入框里的**原子引用 chip**——提交时由 host 半展开为紧随引用消息之后的模型上下文。
+为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）**官方右侧边栏**注册一个内嵌 **VS Code 网页版** 的标签类型（`ctx.sidebarRightTabs` + `@deepseek-ai/dsh-client-ui-sidebar-right` 的 `sidebar.right.pane.tab` 席位），并把编辑器选区 / 资源管理器文件变成对话输入框里的**原子引用 chip**——提交时由 host 半展开为紧随引用消息之后的模型上下文。用户设置位于官方插件配置卡片：设置 → 插件 → 插件配置 → **VSCode 侧边栏**。
 
 ![npm](https://img.shields.io/npm/v/dsh-sidebar-vscode) ![license](https://img.shields.io/npm/l/dsh-sidebar-vscode) ![node](https://img.shields.io/node/v/dsh-sidebar-vscode) ![CI](https://img.shields.io/github/actions/workflow/status/chendefine/dsh-sidebar-vscode/ci.yml) ![stars](https://img.shields.io/github/stars/chendefine/dsh-sidebar-vscode)
 
@@ -26,16 +26,16 @@
 
 - 包名：[dsh-sidebar-vscode（npm）](https://www.npmjs.com/package/dsh-sidebar-vscode)
 - 源码：[chendefine/dsh-sidebar-vscode（GitHub）](https://github.com/chendefine/dsh-sidebar-vscode)
-- 版本：0.2.8
+- 版本：0.3.2
 - 许可证：MIT
 - 平台：web（DSH Web GUI）
-- 测试：467 例全部通过（19 个规格文件）
+- 测试：511 例全部通过（24 个规格文件）
 
 ## 功能简介
 
 **标签页**
 
-- 在 better-sidebar 侧边栏注册 `VSCode` 标签页（tab id `dsh-sidebar-vscode:vscode`），以同源 iframe 内嵌 `code serve-web` 工作台，并自动定位到**当前会话的工作区**（`<base>/?folder=<映射后路径>`）；标签切换不销毁 iframe，VS Code 会话状态保留；
+- 在官方右侧边栏注册**页面标签类型** `vscode`（两阶段注册：静态定义进 `ctx.sidebarRightTabs`（含引导页入口框），正文进 keyed 的 `sidebar.right.pane.tab` 席位），以同源 iframe 内嵌 `code serve-web` 工作台，并自动定位到**当前会话的工作区**（`<base>/?folder=<映射后路径>`）。官方 pane 只渲染活动标签的正文，而 iframe 一旦离开父节点浏览上下文即被销毁（HTML 规范：removing steps 销毁 child navigable；Chromium 151 实测同 document 内搬家也会整帧重载），因此 workbench **并不住在标签正文里**：`workbenchRuntime.ts` 把它放进 `document.body` 下的常驻宿主、永不离开 DOM，正文只渲染占位符，由投影器把宿主盒子钉在占位矩形上（见技术架构「常驻工作台」一节）。**同 pane 切走再切回零成本**——帧、WebSocket、编辑器状态全程在线；工作区 / `serverUrl` / `pathMap` 变化原地重载；关闭标签（记录移除，即 signal abort）销毁工作台，插件卸载亦然；
 - 工具栏显示工作区路径，提供「刷新」「在新窗口打开」；外观跟随 DSH 亮 / 暗 / 系统主题；界面文案中英双语。
 
 **引用注入**
@@ -63,17 +63,19 @@
 
 - **降级与恢复**：直连跨域 `serverUrl` 时同源桥不可用，信封落入真实剪贴板，**粘贴进输入框仍被识别**为 chip 并落在粘贴光标处；chip 插入被输入机拒绝（提交中等瞬态）时退化为追加纯文本 mention（host 解析路径相同，仅失去 chip 外观）；从对话气泡 / 外部编辑器**复制渲染出的引用再粘回**——即使是 sigil 被空白撑开的散架文本（`@ [ label ]( dsh-vscode: … )`）或丢失闭合括号的截断复制体——经 canonical 校验后在光标处重建为原子 chip，前后散文保持原样（fail-soft，绝不报错）；
 
-- **默认标签**：可选开关让**全新会话**的侧边栏默认打开 VSCode 标签（替换 better-sidebar 硬编码的「文件」种子标签）；已打开过的会话保持各自布局，关闭后只影响之后的新会话。
+- **`openAsDefault` 开关**只控制下面三个文件打开接管（better-sidebar 时代的「新会话种子交换」随该体系一同移除——官方侧栏种子是引导页、布局仅内存态、`openTab` 必定展开列，新会话的发现路径就是引导页入口框）。
 
-- **对话文件点击接管**（同一开关控制，方案 II + III）：对话里点击**变更文件标签**（每轮结束的 produced-files chips）、工具行路径链接或正文文件引用时，不再打开 better-sidebar 内置的「文件」标签，而是聚焦本 VSCode 标签（面板自动展开）并在内嵌 VS Code 里直接打开该文件——无 workbench 重载。**文件类型拦截（`openBlocklist`）**：命中黑名单后缀（默认 pdf/docx/xlsx/pptx/png/jpeg/jpg，可在功能设置增删）的文件不进 VSCode，改道 better-sidebar 自带「文件」标签打开——其文件查看器正是侧边栏渲染图片/PDF/Office 文档的界面（仍走侧边栏接管，不落宿主打开器）。方案 III 的包装器对该路径改调「文件」标签改道并照常返回成功回执（仅当「文件」标签类型在侧边卡片设置里被禁用时才回落宿主 OS 打开器），方案 II 的 chips 走同一改道，改道被拒时降级调渲染站点原生 `openFile`；未命中路径行为不变，每次点击现读设置。两条接管缝：**方案 II** —— 以 priority -2 注册 `conversation.chat.turnTail` slot（抢在 better-sidebar 自己的 -1 条目之前），用同源推导逻辑认领 produced-files 行（优先读引擎 Turn data 的 `deliverables` 记录，nodes 推导作 fallback；匹配值额外携带 owner 的 `openFile` 供命中回退），chips 渲染为视觉孪生但点击改道本标签；**方案 III** —— 包装运行时的对话文件打开漏斗，按运行时版本二选一：gateway 时代的 `remote.session.openWorkspacePath` 宿主 Remote（ui-chat 注入的 `openFile` —— 工具行路径链接与正文引用的唯一生产调用方；命名空间方法是 getter-only 自有属性，包装器以自定义 getter 重定义它且每次访问都重读原方法，经一个嵌套的可选 inject 安装——该子 fiber 会一直等待直到 `remote.session` 服务出现），或旧版 `workspaces.openPath` 客户端服务（ui-conversation 的 apply.ts）——两者恰好只会装上一个。**与 dsh-better-sidebar ≥ 0.18.0 的互操作**：该插件如今会用「值属性」包装器 shadow 同一个 gateway 时代方法（捕获原始闭包、按批次模块次序先于本插件安装），因此重定义需同时兼容两种形态——宿主 getter 挂载与对方的值属性 shadow——后装者处于最外层、先看到每次调用（本插件晚于对方加载，接管即可认领打开；对方的闭包留作 decline 时的回落）。安装数秒后的一次性重断言，用于修复对方禁用/启用循环把其 shadow 重装到我们之上所留下的窗口。方案 III 同时修复一个 headless 容器坑：better-sidebar 在其内置「文件」标签被禁用时会放弃自己的接管，让打开落到宿主 OS 打开器上（`spawn xdg-open ENOENT`）；本包装让这些打开无论该设置如何都落到 VSCode 标签。点击后的链路：meta 携带 `openRequest` → 本插件 host 半写 `/tmp/dsh-sidebar-vscode/<slug(workspace)>/cmd.json` → 扩展（≥ 0.1.2）500ms 轮询消费 → `showTextDocument`；`cap.json` 活性标记 + 能力探测失败时降级为 URL `payload` 参数整页重载一次。**启动标签投递（扩展 ≥ 0.1.3）**：serve-web 会在标签页 iframe 消失后仍让先前的扩展宿主（连同其 500ms 轮询）存活一段时间,于是「关掉 VSCode 标签后再点文件」的点击会与那个残留宿主竞速——它把命令吃掉、把文件开进垂死窗口,新宿主的账本对账又把这个文件当幽灵关掉(打开无声丢失)。现在客户端会等本次启动的 nonce 落盘后再发送,并把 nonce 作为启动标签写进命令(`cmd.json {boot}`);只有以同一 nonce 启动的宿主才会消费带标签的命令。开关关闭 = 完全不启用（chat 行为零变化）。
+- **右侧边栏按钮接管**（同一开关）：会话头部的「打开右侧边栏」按钮（折叠态的展开控制，官方 `ExpandButton`，唯一带 `data-sidebar-right-expand` 标记的节点）原本把列展开到上次停留的标签——新表面的种子是引导页（多条引导入口并存时官方种子规则永远解析到 guide）。开关开启时，本插件在 document **捕获阶段**截获该按钮的点击并改发 `openTab('vscode')`：揭示/新建会话唯一的 workbench 页标签并同一步展开列（打开自带的展开恰好覆盖按钮原要执行的 `setExpanded(true)`；只有打开成功后才 `stopPropagation` + `preventDefault`，失败则点击原样落回官方展开）。按钮直连每会话 store、无公开服务接缝，DOM 捕获是唯一稳定切入点；开关每次点击现读，关闭即完全恢复官方行为。
 
-- **设置页「打开配置文件」接管**（方案 IV，同一开关）：按钮原本把 `$DSH_HOME/settings.yaml` 交给系统原生打开器——headless 容器上直接失败（`xdg-open` 缺失）；当前运行时上点击走 `remote.settings.openSettingsDocument` 宿主 Remote（SettingsDocumentStore.open 是唯一生产调用方；包装器重定义该命名空间方法的 getter-only 自有属性，经嵌套可选 inject 安装——子 fiber 等到 `remote.settings` 服务出现才运行），gateway 之前的运行时则走旧版 `/api/settings.openDocument` 成员——两者恰好只会拦截到一个。开关开启时，本插件改走自有的受信围栏路由（`POST /sidebar-vscode/api/settings.document` → `prepareDocument()`）取到文档绝对路径，再复用与对话点击完全相同的 `openRequest` 通道改道——配置文件在内嵌 VS Code 里打开（绝对路径无需命中 `pathMap` 规则，`mapPathForOpen` 对未匹配路径原样透传）。改道落地后「设置」弹框也会自动关闭：弹框开启状态是组件本地 state（没有服务暴露关闭方法），关闭走弹框自身挂在 document 上的 Escape 监听（生命周期恰好等于弹框开启期）——合成一次 Escape 键事件即可，视野留给工作台。全程 fail-soft：settings 服务缺失、host 半未重载、任何传输错误都回退到原生打开（弹框不关），按钮不会因本插件而坏。
+- **对话文件点击接管**（同一开关控制）：对话里点击**变更文件标签**（每轮结束的 produced-files chips）、工具行路径链接或正文文件引用时，改在内嵌 VS Code 里直接打开该文件——官方运行时把这些打开全部路由到 `ctx.sidebarRight.openResource` 公共漏斗（ui-chat 注入的 `openFile`、deliverables 行的 chips、正文文件链接），本插件在 controller 实例上包装这**一个**接缝（原型方法之上的自有属性 shadow；卸载时仅当阴影仍属自己才还原）。包装器解析 `dsh-resource://file/session/<id>/<rel>` / `…/absolute/<path>` 地址、解析会话工作区根，把打开翻译为 `openTab('vscode', { params: { path, line? } })` —— 侧栏同一步展开并揭示唯一的 workbench 标签，文件经 `tab.navigation`（带单调 `revision` 的 params——天然的单发命令载体）落到其内部。**文件类型拦截（`openBlocklist`）**：命中黑名单后缀（默认 pdf/docx/xlsx/pptx/png/jpeg/jpg，可在设置卡增删）的文件不进 VSCode——调用原样落回官方路由，由官方注册表的查看器认领（今天是内置文本预览；未来的查看器插件会注册自己的官方类型）。拒绝路径同理：开关关闭、非文件地址、解析失败、会话根未知都原样放行，且每次点击现读设置。认领后的链路：正文侧的 navigation 消费者 → 扩展 spool（`/tmp/dsh-sidebar-vscode/<slug(workspace)>/cmd.json`，500ms 轮询消费、`showTextDocument`）——`cap.json` 活性标记 + 能力探测把门，任一失手降级为 URL `payload` 参数整页重载一次。**启动标签投递（扩展 ≥ 0.1.3）**：命令等本次启动的 nonce 落盘后才发送，并把 nonce 作为启动标签写进命令（`cmd.json {boot}`）；只有以同一 nonce 启动的扩展宿主才会消费带标签的命令（残留宿主不得把命令吃进垂死窗口）。开关关闭 = 完全不启用（chat 行为零变化）。
+
+- **设置页「打开配置文件」接管**（同一开关）：按钮原本把 `$DSH_HOME/settings.yaml` 交给系统原生打开器——headless 容器上直接失败（`xdg-open` 缺失）；当前运行时上点击走 `remote.settings.openSettingsDocument` 宿主 Remote（SettingsDocumentStore.open 是唯一生产调用方；包装器重定义该命名空间方法的 getter-only 自有属性，经嵌套可选 inject 安装——子 fiber 等到 `remote.settings` 服务出现才运行），gateway 之前的运行时则走旧版 `/api/settings.openDocument` 成员——两者恰好只会拦截到一个。开关开启时，本插件改走自有的受信围栏路由（`POST /sidebar-vscode/api/settings.document` → `prepareDocument()`）取到文档绝对路径，再以 `openTab('vscode', { params: { path } })` 改道——与对话点击同一条导航通道，配置文件在内嵌 VS Code 里打开（绝对路径无需命中 `pathMap` 规则，`mapPathForOpen` 对未匹配路径原样透传）。改道落地后「设置」弹框也会自动关闭：弹框开启状态是组件本地 state（没有服务暴露关闭方法），关闭走弹框自身挂在 document 上的 Escape 监听（生命周期恰好等于弹框开启期）——合成一次 Escape 键事件即可，视野留给工作台。全程 fail-soft：settings 服务缺失、host 半未重载、任何传输错误都回退到原生打开（弹框不关），按钮不会因本插件而坏。
 
 ## 安装方法
 
 ### 前提
 
-- DSH 宿主（Web GUI）+ 已安装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) ≥ 0.12（可选 peer：缺席时标签页注册静默跳过，粘贴兜底仍可用；开发基线 0.16）；
+- Web 应用带官方右侧边栏的 DSH 宿主（`@deepseek-ai/dsh-client-ui-sidebar-right`；`sidebarRightTabs` / `sidebarRight` / `settingsScope` 服务自 0.1.5-alpha.1 起存在——会话头部的「展开侧栏」按钮即标志）。缺席时客户端 fiber 静默等待、什么都不注册；
 - 一个浏览器可达的 `code serve-web` 实例。接入形态按部署环境任选：
   1. **内置反代（默认，Windows / 局域网直跑 `dsh web` 首选）**——`serverUrl` 留空即默认 `http://127.0.0.1:8000`（本机裸启动 `code serve-web` 的完整地址），或直填 serve-web 输出的任意完整地址（可含基路径与 `?tkn=` 令牌）。地址经 `/sidebar-vscode/api/proxy.config` 推给宿主半，在 `dsh web` 自己监听的端口上挂载为**同源 `/sidebar/vscode/`**（HTTP 透传 + WebSocket 管道 + 令牌自动附加），零 nginx、零启动参数：
      ```sh
@@ -142,15 +144,16 @@ scripts/install-extension.sh --vsix <path>    # 使用指定 VSIX
 
 - **编辑器台账（`editors.json`）**——扩展在每次标签变动时把窗口当前打开的文件标签（顺序 + 活动编辑器）**同步**写进 spool，销毁竞态无法弄丢它；下次激活时磁盘上的内容就是上一会话的最终状态。
 - **启动对账**——激活时先等 VS Code 自身的恢复落定，再让窗口对齐台账：台账里没有的恢复标签（关标签前已关闭的文件）被关闭（脏标签保留，数据优先）、恢复丢失的台账文件被补开、活动编辑器复原。**无台账**的启动（工作区首次启动，或降级 URL-payload 打开）完全不动 VS Code 自身行为。
-- **隐藏揭幕（`boot.begin` / `boot.status`）**——挂载 iframe 之前，标签页先在 spool 里停放一枚启动 nonce（`bootreq.json`）；扩展对账完成后在 `boot.json` 回执里回显它，客户端在此之前让 iframe 保持 opacity 0、以加载遮罩示人（超时兜底直接揭幕）。用户看到的**第一帧**就是对账完的编辑器区——绝不会先看见某文件被打开又被关掉。全链路 fail-soft：较旧的 host 半（boot 路由尚未重载）回落到 **DOM 静默观察器**（同源读取 workbench 的编辑器标签条——静默即揭幕），跨源直连 iframe 则不加门控、按原生行为可见启动。
-- **台账归属围栏 + 启动轮换（扩展 ≥ 0.1.3）**——serve-web 在渲染器消失后也会让扩展宿主存活一段时间，而这类残留宿主的台账处理器仍然 armed：它会把自己那个**不可见窗口**的标签集写进共享的 `editors.json`，对账的 reopen 循环还会把台账文件开进该窗口、其标签事件又反过来重写台账——台账就此被可见 workbench 从未展示过的文件毒化，之后每次启动都如实复活（「已关闭的文件又回来了」）。台账现在**归属本次启动**：每次台账写入、对账本身、以及幽灵补刀都会复核停放的启动 nonce 是否仍是本宿主激活时的那枚。客户端在 iframe **原地重载**时（面板收起或切换工作区会把窗格 DOM 摘除、再插回时浏览器视为整帧重载——新渲染器的宿主若沿用旧 nonce 就会错配）以及标签页卸载时轮换该 nonce，把所有仍持旧 nonce 的宿主一并退役。
+- **隐藏揭幕（`boot.begin` / `boot.status`）**——挂载 iframe 之前，标签页先在 spool 里停放一枚启动 nonce（`bootreq.json`）；扩展对账完成后在 `boot.json` 回执里回显它，客户端在此之前让 iframe 保持 opacity 0、以加载遮罩示人。用户看到的**第一帧**就是对账完的编辑器区——绝不会先看见某文件被打开又被关掉。揭幕是一场**竞速**而非单一等待：回执轮询与 **DOM 静默观察器**（同源读取 workbench 的编辑器标签条）并联，先到先赢——原地重载后的扩展宿主可能不再重新激活（回执永远不来），而已经画完的工作台本身就是「布景完成」的证明。但**仅静默构不成这个证明**：幽灵启动的整个对账 settle 窗口内，标签条是「静默但错误」的（静默恰恰是随后那次关闭的前置条件，绝不是关闭已发生的证据），因此竞速者是**账本感知**的——`boot.begin` 应答会一并带回停靠时启动账本的期望开档集合，静默揭幕（以及 4 秒轮询预算耗尽后的兜底）还额外要求采样到的标签条与该集合按基名多重集一致（标签条 DOM 不暴露全路径）；回执匹配仍无条件揭幕，无账本（首次启动 / 较旧 host 半）照旧仅凭静默，而账本不吻合的标签条会让 iframe 一直藏到对账关闭落地、或观察器自身 8 秒上限兜底。提前揭幕还有第二重危险，仅靠握手看不见：用户在「已揭幕、对账未跑」窗口里打开的文件晚于对账所依据的账本，会被当幽灵关掉——因此揭幕后帧内的**首个用户手势**会落盘 `interact.json`（nonce 作用域，路由 `boot.interact`），对账的关闭循环与幽灵补刀都会为本 boot 的交互标记让步（回执报告让步数；陈旧标记绝不会解除后续 boot 的武装）。全链路 fail-soft：较旧的 host 半（boot 路由尚未重载）由 DOM 静默观察器单独裁决，跨源直连 iframe 则不加门控、按原生行为可见启动。
+- **跨标签启动锁**——两个同源 DSH 页面并发启动工作台时会竞争**创建** VS Code 的 IndexedDB 存储（`vscode-web-db`），败者可能在自身启动过程中挂死数分钟（实测：一次 294 秒的库打开；两个全新 profile 各自卡到*另一*标签页关闭为止）。因此 iframe 挂载前必须先持有 Web Lock `dsh-sidebar-vscode:workbench-boot`，工作台绘制完成即释放（那一刻创建竞争已经结束）；排队超过半秒会在加载遮罩中说明缘由。设计上处处 fail-open：没有 Web Locks API、锁被卡死的持有者（60 秒等待上限）、或不可读的框架（30 秒持有上限）都选择放行而不是阻塞。
+- **台账归属围栏 + 启动轮换（扩展 ≥ 0.1.3）**——serve-web 在渲染器消失后也会让扩展宿主存活一段时间，而这类残留宿主的台账处理器仍然 armed：它会把自己那个**不可见窗口**的标签集写进共享的 `editors.json`，对账的 reopen 循环还会把台账文件开进该窗口、其标签事件又反过来重写台账——台账就此被可见 workbench 从未展示过的文件毒化，之后每次启动都如实复活（「已关闭的文件又回来了」）。台账现在**归属本次启动**：每次台账写入、对账本身、以及幽灵补刀都会复核停放的启动 nonce 是否仍是本宿主激活时的那枚。客户端在 iframe **原地重载**时（工作区 / `serverUrl` / `pathMap` 变化、降级通道 payload、手动刷新——运行时的换键路径；新渲染器的宿主若沿用旧 nonce 就会错配。单纯切换标签已不再触发任何重载，见「常驻工作台」一节）以及工作台销毁时轮换该 nonce，把所有仍持旧 nonce 的宿主一并退役。
 - **迟到幽灵补刀（扩展 ≥ 0.1.3）**——VS Code 自身的恢复可能在 对账的 settle 预算耗尽**之后**还在陆续落标签（重工作区的慢启动），而这些迟到者恰恰是没人会再去关的「已关闭文件幽灵」。武装之后会间隔着跑几轮**只关不开**的差分：每轮关掉台账未列出且处于**后台**的标签，豁免脏标签与活动编辑器（重新挂载后数秒内，用户主动打开的文件必然成为活动编辑器，而恢复幽灵落在后台）；任何一轮都不会打开文件。
 
 ## 使用方法
 
 ### 打开标签页
 
-侧边栏「+」菜单选择 **VSCode**；或开启 `openAsDefault` 设置，让全新会话默认打开它（收起状态保持收起，下次展开即见）。工具栏显示当前工作区路径，「⧉ 在新窗口打开」可弹出独立窗口。
+展开右侧边栏，在引导页（「开始」页）选择 **VSCode 工作台** 入口框——它在引导标签的位置打开。布局仅内存态：刷新页面后每个会话回到折叠默认态。工具栏显示当前工作区路径，「⧉ 在新窗口打开」可弹出独立窗口。
 
 ### 发送选区
 
@@ -178,12 +181,12 @@ scripts/install-extension.sh --vsix <path>    # 使用指定 VSIX
 
 ### 设置
 
-设置页「侧边卡片 → VSCode → 功能设置」（标签卡片齿轮弹窗），五行由本插件自有面板渲染，持久化在 better-sidebar `pluginSettings['dsh-sidebar-vscode:vscode']`，**不在 cordis.patch.yml**（下表的 `pathMap` 仍从同一 blob 读取，但刻意不设面板行）：
+设置位于官方插件配置卡片——**设置 → 插件 → 插件配置 → VSCode 侧边栏**：宿主半注册 `vscode-sidebar` 设置命名空间（`ctx.settings.installSection`），浏览器半注册按其键位的 `settings.plugin.item` 卡片，每行经 `ctx.settingsScope` 提交（`set`/`unset`；卡片头部的「恢复默认」逐字段清除用户层，各自回到组合基线）。**不在 cordis.patch.yml**（下表的 `pathMap` 由同一命名空间伺服，但刻意不设卡片行）：
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `openAsDefault` | `false` | 全新会话的侧边栏默认打开 VSCode 标签（替换「文件」种子标签）；已打开过的会话保持各自布局。该开关同时控制对话文件点击接管与设置页「打开配置文件」接管 |
-| `openBlocklist` | （未设 = `pdf, docx, xlsx, pptx, png, jpeg, jpg`） | 「不由 VSCode 打开的文件类型」：后缀字符串数组，面板行为 tag 编辑器（tag 带 × 删除；输入框自由输入后缀，回车/逗号添加，下拉建议常用二进制类型）。命中后缀的文件在对话中点击时改由侧边栏自带「文件」标签打开（其查看器负责渲染图片/PDF/Office 等类型）；仅当「文件」标签类型在侧边卡片设置里被禁用时才回落系统默认打开方式（产出文件 chips 在该拒绝下同样降级走渲染站点原生 `openFile`）。**未设置 = 默认七项；清空 = 存 `[]`，即全部由 VSCode 打开**（两者语义不同）。匹配大小写不敏感，按「基名以 `.后缀` 结尾」判定（`a.notpdf` 不命中 `pdf`；条目可含内部点，如 `tar.gz`；无后缀文件永不命中）；每次点击时现读设置，改动即时生效。设置页「打开配置文件」接管**不受**此表影响 |
+| `openAsDefault` | `false` | 控制三个文件打开接管（对话文件点击、设置页「打开配置文件」、右侧边栏展开按钮）。关闭后处处恢复官方默认行为 |
+| `openBlocklist` | （未设 = `pdf, docx, xlsx, pptx, png, jpeg, jpg`） | 「不由 VSCode 打开的文件类型」：后缀字符串数组，面板行为 tag 编辑器（tag 带 × 删除；输入框自由输入后缀，回车/逗号添加，下拉建议常用二进制类型）。命中后缀的文件在对话中点击时不被接管——原样落回官方路由，由官方侧栏的查看器认领（今天是内置文本预览；未来查看器插件会注册自己的官方类型），绝不落宿主 OS 打开器。**未设置 = 默认七项；清空 = 存 `[]`，即全部由 VSCode 打开**（两者语义不同）。匹配大小写不敏感，按「基名以 `.后缀` 结尾」判定（`a.notpdf` 不命中 `pdf`；条目可含内部点，如 `tar.gz`；无后缀文件永不命中）；每次点击时现读设置，改动即时生效。设置页「打开配置文件」接管**不受**此表影响 |
 | `serverUrl` | （空 = `http://127.0.0.1:8000`） | `code serve-web` 输出的完整地址（可含基路径与 `?tkn=` 令牌）；留空 = 默认 `http://127.0.0.1:8000`（本机裸启动）。代理可达时一律挂载为同源 `/sidebar/vscode/` 打开；宿主不可达时完整地址回退直连（同源桥降级）；显式相对子路径（如 `/vscode`）在代理关闭时按网关语义使用 |
 | `pathMap` | （空 = 不映射） | 仅配置文件——无设置面板行（少见，分容器部署才需要）。DSH 路径前缀 → VSCode 容器路径前缀，`源=目标` 对用 `;` 分隔；最长源前缀优先；某前缀已是映射目标时原样透传。留空时**不做任何映射**，会话 cwd 与文件均按原始绝对路径直接打开（同容器部署即用此默认）。规则只做前缀改写、**不是白名单**：未命中任何规则的绝对路径原样透传（文件真不存在时由 VS Code 报错兜底） |
 | `maxLines` | `200`（范围 1–2000） | 单次引用注入的代码行数上限，超出保留首尾两半、省略中间并标注省略区间 |
@@ -210,13 +213,19 @@ scripts/install-extension.sh --vsix <path>    # 使用指定 VSIX
 DSH 插件分 host（node）半与 browser 半，本插件各自职责：
 
 ```
+┌─ 共享协议平面 ────────────────────────────────────────────────┐
+│ src/shared/protocol.ts  跨进程边界的全部常量，单一事实来源；      │
+│                         扩展侧 CJS 镜像由锁步测试钉死不漂移      │
+└───────────────────────────────────────────────────────────────┘
 ┌─ host 半 (node) ──────────────────────────────────────────────┐
 │ src/index.ts    agent/created → 在每个 agent 作用域挂 pre-step │
 │ src/mention.ts  引用边界核心：解析改写 / 去重 / 新鲜度 / 注入    │
 └───────────────────────────────────────────────────────────────┘
 ┌─ browser 半 (web) ────────────────────────────────────────────┐
 │ src/client/index.tsx        注册 tab + dock + @ 触发源 + 词典   │
-│ src/client/VscodeView.tsx   cwd → 路径映射 → iframe + 桥        │
+│ src/client/VscodeView.tsx   标签视图：投影锚点 + 外壳            │
+│ src/client/*Controller      启动门控/焦点围栏/基址/打开请求/打开 │
+│                              编排器（均可注入依赖单测）          │
 │ src/client/references.ts    载荷→chip、插入、tag 栏、粘贴恢复    │
 │ src/client/composer.tsx     dock 组件：引用 tag 栏 + 粘贴兜底    │
 │ …（完整清单见下文目录结构）                                       │
@@ -224,7 +233,17 @@ DSH 插件分 host（node）半与 browser 半，本插件各自职责：
 ```
 
 - **host 半**是模型 facing 边界：对每个存活 agent 在 `agent/pre-step` 监听，解析被认领用户消息中的规范 mention（markdown 与裸 URI，两种 scheme，严格 canonical 校验），改写为可读标签（`freezeMessage` 保留消息 id），按引用身份去重后逐条注入 context（`createUserMessage`，紧跟首次引用它的消息）。文件系统只用于新鲜度标记——快照内容随 mention 携带，注入不依赖磁盘状态；
-- **browser 半**负责全部 UI：标签页、chip、tag 栏、设置面板、词典；better-sidebar 缺席时标签注册静默跳过。
+- **browser 半**负责全部 UI：官方 `vscode` 标签类型与正文、chip、tag 栏、设置卡片、接管、词典；官方侧栏服务缺席时客户端 fiber 静默等待、什么都不注册。
+
+### 常驻工作台（切换标签为何零成本）
+
+官方 pane 只渲染活动标签的正文，而 iframe 元素一旦离开父节点，其嵌套浏览上下文即被销毁——HTML 规范的 removing steps 会 destroy child navigable，且 Chromium 151 实测：即使同 document 内移动 iframe（或移动其祖先容器）也会整帧重载。VS Code 没有「快照重建」路径（`ui-sidebar-terminal` 用控制器里的屏幕修订重建 xterm——本设计借用的模式，换成唯一一种「状态即文档」的元素），因此工作台要活过标签切换，只有一条路：**元素永不离开 DOM**。
+
+- `workbenchRuntime.ts` 持有页面级单例——一个一次性挂到 `document.body` 的宿主 `div`，iframe 在首次获准加载时创建于其中，销毁时才移除。全部启动门控控制器（boot lock、boot gate、焦点围栏、打开通道 opener、剪贴板桥）都住进运行时，状态因此活过标签正文的挂载周期。视图（`VscodeView.tsx`）只渲染占位符与外壳，向运行时喂解析后的输入，并按 `${sessionId}:${tabId}` 采纳它；
+- `projection.ts` 把宿主盒子粘在占位矩形上——可见期间每动画帧一次 `getBoundingClientRect` 读 + 一次样式写，投影帧因此能跟上面板滑动、拖宽手柄、全屏切换与浮窗拖动而无需移动 iframe。层叠策略：停靠 / 全屏 45（高于全屏面板的 40、低于浮窗宿主的 60），占位符浮出时 61（高于浮层、低于 70 的菜单）。隐藏时以 `visibility` 保留最后矩形——宿主归零会逼 VS Code 在每次隐藏/显示周期里重排布局；
+- 防泄漏纪律：每页最多一个活工作台（basis 变化——换工作区、改设置——原地重载，绝不出现第二个实例；boot lock 存在的意义正是防止两个同源并发启动把 VS Code 的 IndexedDB 死锁）；运行活过正文卸载，在**最后一个**采纳标签记录消失时销毁（框架在记录移除时 abort 的 tab signal），插件卸载时也销毁（client 入口 teardown 里的 `destroyWorkbenchRuntime()`）。两个 pane 可同时持有同 kind——最后挂载者拥有投影，其释放时回退到前一个 pane 的占位符而非留白。
+
+对旧防护所针对的重载路径的影响：同 pane 切标签、面板收起/展开、同工作区切换会话，现在**都不再重载**（帧在后台继续运行——连启动都会在后台完成）；原地重载只剩：工作区 / `serverUrl` / `pathMap` 变化、降级通道 payload、手动刷新按钮——恰好是启动门 nonce 轮换与账本对账仍然发挥作用的场合。重挂载后的瞬时 base 重解析也绝不拆掉活帧——运行时持有上一个已解析 base，直到出现不同的解析结果。
 
 ### 四级链路
 
@@ -247,15 +266,14 @@ DSH 插件分 host（node）半与 browser 半，本插件各自职责：
 - 捕获时（`truncateSnapshot`）：LF 归一化 → 行数上限（保留首尾两半整行）→ 字节上限（首段从尾部缩、尾段从头部缩，多字节安全）；载荷记录 `headLen` / `omitLines` / `omitBytes`，host 渲染内嵌省略标记，标记本身不计入计数；
 - 提交时（`freshnessOf`）：在会话 cwd 约束下重读磁盘行区间（路径越界 / 文件超 8 MiB / 读取失败一律 `unknown`），哈希比对得 `fresh` / `stale`；截断快照校验磁盘区间以保留首段开头、以保留尾段结尾且中间至少一字符（被省略中间的改动不可检测，截断本身不致 stale）。
 
-### 默认标签实现
+### 打开导航（单发打开命令）
 
-better-sidebar 对新会话的种子标签是硬编码的（上游 `makeDefaultState('editor-home')`——一个无路径的「文件」editor 标签），没有「默认开哪个 tab」的偏好项。本插件按上游服务建议的伴生方式实现（`src/client/defaultTab.ts`，不改上游）：监听 sidebar store，开关开启且当前会话仍是**未被触碰的种子状态**（单 pane、至多一个无路径「文件」标签、无终端计数、无展开目录、无底部标签、无浮窗）时 `openTab({ type })` 落入 VSCode 标签、`closeTab` 移除种子——替换而非叠加；类型型 open 不强制展开面板。每会话只执行一次（`localStorage` 标记——否则用户关掉标签后会被下一次 store 通知重新打开，永远关不掉）；tab 类型被禁用或 open 未真正落地时绝不移除种子。
-
+官方侧栏把一次打开送到标签正文的形式是 `tab.navigation` —— `{ address, params, revision }`，每次导航 revision 递增——这正是 better-sidebar 时代要靠 `openRequest` meta + 墙钟 nonce + 持久化 meta 卫生手工搭建的「单发命令载体」。`src/client/openRequests.ts` 只保留仍然要紧的纪律：revision 0（种入的引导、撤销恢复的记录）不是任何人的点击；页级水位表（`${sessionId}:${tabId}` → 已执行的最高 revision）让重挂载跳过已执行过的导航、而挂载批次的点击仍然执行；帧的启动门未落定时新导航延迟执行（其打开命令须携带启动 nonce）。navigation 消费者在执行时铸造扩展命令 nonce，把打开交给双通道 opener（`workbenchLink.ts`）。
 #### 焦点防护（workbench 必须自己赢得焦点）
 
-VS Code workbench 开机后会**编程性聚焦自身内容**——Getting Started 欢迎页渲染即 `focus()` 自身，恢复的工作区会聚焦它恢复的编辑器——大约在 iframe 加载后 0.5–4 秒发生，与用户是否交互无关。只要这次开机落在用户并非奔着 workbench 去的时刻，光标就会被从脚下夺走：新会话的默认标签在收起面板后隐形启动会无声夺走光标（闪两下）；而**跨工作区切回会话**时 workbench 会重新开机——面板在 React 层被 keep-alive 存活，但 iframe 在切走时被移出文档、切回时重新插回，浏览器视为重载——恢复的文件恰好抢在输入框自动聚焦之后夺走焦点。`src/client/VscodeView.tsx` 用两个机制防护：
+VS Code workbench 开机后会**编程性聚焦自身内容**——Getting Started 欢迎页渲染即 `focus()` 自身，恢复的工作区会聚焦它恢复的编辑器——大约在 iframe 加载后 0.5–4 秒发生，与用户是否交互无关。只要这次开机落在用户并非奔着 workbench 去的时刻，光标就会被从脚下夺走：新会话的默认标签在收起面板后隐形启动会无声夺走光标（闪两下）；而**跨工作区切换会话**时 workbench 会原地重载（basis 变了；同工作区切换则原样复用活帧、零重载）——恢复的文件恰好抢在输入框自动聚焦之后夺走焦点。`src/client/VscodeView.tsx` + `workbenchRuntime.ts` 用两个机制防护：
 
-- **首次加载延迟**：iframe 一直挂起，直到本标签**真正可见过至少一次**（活动标签且面板展开）。新会话的默认标签交换通常发生在面板收起时——隐藏启动 workbench 用户什么都看不到，还白抢焦点；延迟到首次展开后再加载，启动期的任何焦点抓取都发生在用户正看着 workbench 的时候。加载过一次后永不卸载（跨标签切换 / 面板收起保持存活的原有契约不变）。`visible === undefined`（过旧的 better-sidebar 对端不传该标志）时**fail-open**：照旧立即加载。
+- **首次加载延迟**：iframe 一直挂起，直到本标签**真正可见过至少一次**（官方停靠正文可见性：活动标签且面板展开；浮窗恒可见）。接管打开若落在面板收起时，workbench 等待观众——隐藏启动用户什么都看不到，还白抢焦点；延迟到首次揭示后再加载，启动期的任何焦点抓取都发生在用户正看着 workbench 的时候。延迟条件是运行时的 `visibleOnce` 门，因此活过标签正文的卸载周期——而一旦帧已存在，切到同 pane 其他标签就再无任何成本（正文卸载、帧转入后台运行，切回即时重新投影）。
 - **焦点围栏**（`src/client/focusGuard.ts`）：焦点一进入帧内，立即还给帧外最近持有它的元素——归还次数按滑动窗口限额（默认 10 秒 5 次），病态循环抢焦点时围栏让位以免焦点乒乓——仅在两种情况下武装：
   - **隐藏**（**显式** `visible === false`）：帧收不到用户点击，任何进入都是偷取。面板收起或标签非当前时，抢焦点无从合法化。
   - **开机**：帧**每次**加载后的一个窗口期（默认 6 秒），因为每次加载都是一次 workbench 开机、每次开机都会自聚焦——页面刷新与工作区切回的重插都算。窗口期内进入会被弹回，**除非**用户在帧内做了手势（同源 `pointerdown`/`keydown` 追踪，每次加载重挂——刚开机的 workbench 一点即入），或父页面 Tab 键把焦点交了过来。唯一被认可的开机是上面的延迟首载：那是用户展开标签释放的加载，抢焦点正中下怀。跨域 iframe（直连回退模式）看不到帧内手势，开机围栏直接解除，绝不弹掉用户的真实点击。
@@ -288,44 +306,66 @@ DSH 会话与嵌入 workbench 看到**同一文件系统、同一路径**，因�
 
 ### 目录结构
 
+代码按领域分层 —— 一个所有运行时共用常量的**共享协议平面**、host 半的服务、browser 半的控制器 + 视图、按同样缝隙分解的扩展 —— 任何契约的改动都只落在一处：
+
 ```
-src/index.ts                  # host 半入口：agent/created → pre-step 边界挂载 + /sidebar-vscode/api 围栏路由（inject: agents, webServer, webRuntime）
-src/vscodeProxy.ts            # host 半：/sidebar/vscode 同源反代（HTTP 透传 + WS upgrade 管道 + 路径/令牌改写 + configure 通道）（41 测试）
-src/mention.ts                # host 半核心：解析改写/去重/新鲜度/<text-selection> 等注入（38 测试）
-src/mentionCodec.ts           # 共享纯逻辑：两种 scheme 规范 URI 编解码/截断/哈希归一（42 测试）
-src/openChannel.ts            # host 半：/tmp 命令通道 spool（workbench 扩展轮询；slug 规范、能力新鲜度、原子写）（11 测试）
-src/trust-fence.ts            # host 半：本插件路由的浏览器信任围栏（回环/trustedHosts + 同源标记）
-src/client/index.tsx          # browser 半入口：注册 tab + dock + @ 触发源 + 词典（ctx.effect，HMR 安全）
-src/client/VscodeView.tsx     # 标签组件：cwd → 路径映射 → iframe + 工具栏/提示 + 桥装载 + 焦点防护
-src/client/focusGuard.ts     # 隐藏帧焦点围栏：滑动窗口归还限额
-src/client/clipboardBridge.ts # 同源 iframe navigator.clipboard.writeText 信号补丁（10 测试；跨域读取抛 SecurityError 时 no-op）
-src/client/composer.tsx       # dock 组件：引用 tag 栏（自注入样式）+ 粘贴兜底
-src/client/composerDom.ts     # Lexical composer DOM 的 detect 投影遍历（DOM 选区 ⇄ detect 偏移映射）（11 测试）
-src/client/references.ts      # 载荷→chip（选区/资源）/光标处插入/tag 栏投影/粘贴恢复（69 测试）
-src/client/selection.ts       # 剪贴板信封编解码（选区 + 资源两种 payload）（16 测试）
-src/client/paths.ts           # pathMap 解析/映射/反向映射、URL 构建（34 测试）
-src/client/settings.ts        # pluginSettings 读取 + 截断上限契约（默认/边界/提交助手）（14 测试）
-src/client/settingsRows.tsx   # 功能设置面板：开关行 + 黑名单 tag 行 + 文本行（上下布局）+ 数值行（自注入样式）
-src/client/openBlocklist.ts   # 「不由 VSCode 打开」后缀表：默认值 / 归一化 / 基名后缀匹配（24 测试）
-src/client/settingsTakeover.ts # 设置页「打开配置文件」接管：同一开关下包装 settings.openDocument 并关闭设置弹框（17 测试）
-src/client/openIntercept.ts   # 对话打开接管管线：reroute 驱动 + openRequest 载体 + openPath/openWorkspacePath 包装（48 测试）
-src/client/openChannelApi.ts  # 打开通道 client 半：围栏 /sidebar-vscode/api 探测与命令（11 测试）
-src/client/defaultTab.ts      # 「默认打开 VSCode」：pristine 种子检测 + 换种护栏 + 监听（22 测试）
-src/client/i18n.ts            # locale 服务挂接 + t()
-src/client/locales.ts         # zh/en 词典
-src/client/icons.tsx          # VS Code 标志 + 引用 chip 文件/文件夹/关闭图标（currentColor SVG）
-extension/                    # VS Code 扩展 dsh.selection-reference（命令 + 右键 + 快捷键 + nls 双语 + 文件打开轮询通道）
- ├ extension.js / harness.js / package.json / package.nls*.json / .vscodeignore / vsix/*.vsix
+src/shared/protocol.ts         # 协议平面：跨进程边界的全部常量（信封标记、代理挂载路径、spool 文件名、能力版本、TTL、工作区 slug）——纯模块，host+client 原样引用
+src/index.ts                   # host 半入口：agent/created → pre-step 边界挂载 + /sidebar-vscode/api 围栏路由（一张方法表分发）+ `vscode-sidebar` 设置段注册（inject: agents, webServer, webRuntime；嵌套 settings）
+src/settingsSection.ts         # `vscode-sidebar` 设置段：schema + installSection（5 测试）
+src/shared/settings.ts         # 两半共享的设置模型：命名空间、类型、组合基线
+src/vscodeProxy.ts             # host 半：/sidebar/vscode 同源反代（HTTP 透传 + WS upgrade 管道 + 路径/令牌改写 + configure 通道）（41 测试）
+src/mention.ts                 # host 半核心：解析改写/去重/新鲜度/<text-selection> 等注入（38 测试）
+src/mentionCodec.ts            # 共享纯逻辑：两种 scheme 规范 URI 编解码/截断/哈希归一（42 测试）
+src/openChannel.ts             # host 半：/tmp 命令通道 spool —— 全部持久化走唯一 SpoolStore（原子写 + 容错读）（13 测试）
+src/trust-fence.ts             # host 半：本插件路由的浏览器信任围栏（回环/trustedHosts + 同源标记）
+src/client/index.tsx           # browser 半入口：薄组合根（tab + dock + @ 触发源 + 接管装配），机制全部在下列模块
+src/client/VscodeView.tsx      # 标签视图：投影锚点 + 外壳（工具栏/提示/加载遮罩），向常驻运行时喂输入
+src/client/workbenchRuntime.ts # 工作台守护者：每页一个常驻宿主 + 帧，活过标签正文卸载；lock→gate→src 协调器；采纳者 signal 回收（13 测试）
+src/client/projection.ts       # 矩形投影器：rAF 追踪常驻宿主对准标签正文占位符 + 层叠策略（10 测试）
+src/client/bootGate.ts         # BootGateController：nonce 停靠 → 回执 × DOM 静默揭幕竞速 → 原地重载轮换；+ DOM 静默观察器（13+5 测试）
+src/client/bootLock.ts         # WorkbenchBootLock：跨标签 Web Lock 串行化首次绘制（vscode-web-db 创建竞争）+ acquireWebLock（11 测试）
+src/client/focusFence.ts       # FocusFenceController：每次 load 的手势追踪 + 文档监听，包着 focusGuard 的纯规则
+src/client/focusGuard.ts       # 焦点围栏纯决策 + 滑动窗口归还限额（7 测试）
+src/client/workbenchBase.ts    # WorkbenchBaseController + useWorkbenchBase：mount/直连解析、上游推送/重置、毕业轮询（6 测试）
+src/client/openRequests.ts     # OpenRequestConsumer：单发导航纪律 —— revision 0 静默、页级水位、门控延迟（10 测试）
+src/client/workbenchLink.ts    # createWorkbenchOpener：优先扩展 spool（cap v4 起带启动标签），降级 URL payload 重载（8 测试）
+src/client/clipboardBridge.ts  # 同源 iframe navigator.clipboard.writeText 信号补丁（10 测试；跨域读取抛 SecurityError 时 no-op）
+src/client/composer.tsx        # dock 组件：引用 tag 栏 + 粘贴兜底（样式走 styles.ts）
+src/client/composerDom.ts      # Lexical composer DOM 的 detect 投影遍历（DOM 选区 ⇄ detect 偏移映射）（11 测试）
+src/client/references.ts       # 载荷→chip（选区/资源）/光标处插入/tag 栏投影/粘贴恢复（69 测试）
+src/client/referencePipeline.ts # 插件体、标签页、dock 三方共享的 lander/选项句柄表
+src/client/selection.ts        # 剪贴板信封编解码（选区 + 资源两种 payload）（16 测试）
+src/client/paths.ts            # pathMap 解析/映射/反向映射、URL 构建（34 测试）
+src/client/settings.ts         # `vscode-sidebar` 设置读取（scope 快照 + 基线回退）+ 截断上限契约（默认/边界/提交助手）（18 测试）
+src/client/settingsCard.tsx    # 官方插件配置卡片（settings.plugin.item）：卡片外壳 + 恢复默认 + 开关行 + 黑名单 tag 行 + 文本行 + 数值行（样式走 styles.ts）
+src/client/openBlocklist.ts    # 「不由 VSCode 打开」后缀表：默认值 / 归一化 / 基名后缀匹配（24 测试）
+src/client/settingsTakeover.ts # 设置页「打开配置文件」接管：两个时代包装器共用一个决策核 + 设置弹框关闭（17 测试）
+src/client/openIntercept.ts    # 官方 openResource 接管：本地 file 地址解析器 + wrapSidebarRightOpenResource（门/黑名单放行/params 翻译）（22 测试）
+src/client/takeovers.ts        # 接管家族装配：一张门控接到两条缝（openResource 漏斗 + 两条设置漏斗）
+src/client/openChannelApi.ts   # 打开通道 client 半：围栏 /sidebar-vscode/api 探测与命令（11 测试）
+src/client/definition.ts       # 官方 tab 类型定义：kind/id/params 面 + 引导页入口框
+src/client/styles.ts           # 样式注册表：全部注入 CSS 块 + 一个幂等 adopter
+src/client/i18n.ts             # locale 服务挂接 + t()
+src/client/locales.ts          # zh/en 词典
+src/client/icons.tsx           # VS Code 标志 + 引用 chip 文件/文件夹/关闭图标（currentColor SVG）
+extension/                     # VS Code 扩展 dsh.selection-reference，按同样缝隙分解：
+ ├ extension.js                #   ~90 行激活根（命令 → 读账本 → 对账 → 武装 → 轮询 → 幽灵补刀）
+ ├ lib/protocol.js             #   共享协议平面的 CJS 镜像 —— 由 tests/protocolLockstep.spec.ts 与 src/shared/protocol.ts 锁步钉死
+ ├ lib/fsutil.js               #   原子标记写 + spool 目录
+ ├ lib/envelope.js             #   三个发送命令 + 它们乘坐的剪贴板信封
+ ├ lib/channel.js              #   spool 轮询：能力标记 + 一次性命令消费（TTL/nonce/启动标签三重防护）
+ ├ lib/boot.js                 #   编辑器账本 + 启动对账 + 迟到幽灵补刀 + 拥有它们的 nonce 围栏
+ ├ harness.js / package.json / package.nls*.json / .vscodeignore / vsix/*.vsix
 scripts/install-extension.sh  # 扩展一键安装（vsce 打包 → 落文件 → 注册清单 → 重启 → 健康检查）
 scripts/install-extension.md  # 安装分步文档 + 排障表
 README.md / README.zh-CN.md   # 英文文档 / 本文档（中文）
 screenshot.png                # 产品使用截图（见上方「界面截图」）
-tests/*.spec.ts               # vitest 单测，共 380 例 / 15 文件（如上括注分文件计数）
-cordis.patch.yml              # bundle 通道的 host 半 insert 行（挂载声明）
-tsdown.config.ts              # 双 bundle 构建（host ESM + client ModuleLoader 注册格式 + 纯度门）
-vitest.config.ts              # 测试期 dsh-llm alias（优先 harness 检出，回退已安装包）
-lib/                          # 构建产物（随仓库提交：link: 部署直接服务 lib/client.js）
-.github/workflows/ci.yml      # CI：Node 22 与 24 上的 typecheck / test / build / 包内容校验
+tests/*.spec.ts               # vitest 单测，共 511 例 / 24 文件（如上括注分文件计数）
+cordis.patch.yml               # bundle 通道的 host 半插入行（挂载声明）
+tsdown.config.ts               # 双 bundle 构建（host ESM + client ModuleLoader 格式 + 纯度门）
+vitest.config.ts               # 测试期 dsh-llm 别名（优先 harness 检出，回退已装包）
+lib/                           # 构建产物（随仓库提交：link: 部署直接服务 lib/client.js）
+.github/workflows/ci.yml       # CI：Node 22 & 24 上 typecheck / test / build / 包内容校验
 ```
 
 构建产物交付：host 半为普通 ESM bundle（`@deepseek-ai/dsh-llm` 保持外部导入，由 DSH host loader 解析）；browser 半为 `window.__ModuleLoader__.load({ id, factory })` 注册格式（官方外部 client 插件交付格式），React / cordis 走 external，并带**纯度门**——拒绝 Node 内建与 `@deepseek-ai/*` 值导入。
@@ -338,7 +378,7 @@ lib/                          # 构建产物（随仓库提交：link: 部署直
 git clone https://github.com/chendefine/dsh-sidebar-vscode && cd dsh-sidebar-vscode
 pnpm build        # tsc 声明 + tsdown 双 bundle → lib/
 pnpm typecheck    # tsc --noEmit
-pnpm test         # vitest run（380 例）
+pnpm test         # vitest run（511 例）
 ```
 
 重建后硬刷新浏览器即可（link: 依赖 + 内容 rev 查询参数自动破缓存）；host 半改动需重启 `dsh web`。
@@ -348,7 +388,7 @@ pnpm test         # vitest run（380 例）
 - **pnpm ≥ 11**：pnpm 专属设置只从 `pnpm-workspace.yaml` 读取（`.npmrc` 中的同名键会被**静默忽略**）。本仓库在 `pnpm-workspace.yaml` 固定 `autoInstallPeers: false`（`@deepseek-ai/*` 内部包不在公网 registry）与 `verifyDepsBeforeRun: false`（`node_modules` + lockfile 为冻结基线，跳过 run 前预检），以及 `allowBuilds.node-pty: false`（仅类型引用，不运行其原生构建）；
 - **类型与运行时映射**：`@deepseek-ai/*` 构建期包（`dsh-llm`、`dsh-agent` 及 `dsh-llm` 的运行时 peer）均为从 npm registry 解析的 devDependencies，普通 clone 与 CI 开箱即用；tsconfig `paths` 与 vitest alias 在存在相邻 harness 检出（`/app/dsh`）时优先使用它（其构建产物比已发布 rc 更新），否则回退到已安装的包；
 - **CI**：GitHub Actions（`.github/workflows/ci.yml`）在 Node 22 与 24 上运行 typecheck / test / build / 包内容校验——矩阵对齐 DSH 自身的支持范围（`^22.19.0 || >=24.0.0`，与发布的 `engines` 字段一致）；
-- **devDependencies 基线**：`dsh-better-sidebar@^0.16` 与各 `@deepseek-ai/*` devDependencies 仅为类型、测试与开发期对齐——运行时它们都是可选 peer，由 DSH 宿主解析；
+- **devDependencies 基线**：各 `@deepseek-ai/*` devDependencies（外加宿主侧设置 schema 用的 `@deepseek-ai/schemastery`）仅为类型、测试与开发期对齐——运行时它们都是可选 peer，由 DSH 宿主解析；
 - **扩展手工测试**：`node extension/harness.js extension/extension.js`（stub 掉注入的 `vscode` 模块，跑三条命令并打印信封与解码载荷）。
 
 ### 发布
@@ -376,3 +416,5 @@ git tag v<version> && git push origin main --tags
 ## 许可证
 
 MIT（见 [LICENSE](LICENSE)）。
+
+部署分支使用官方右侧栏和持久编辑器，同时保留按账号隔离的工作区访问。详见[适配说明](FORK.md)。

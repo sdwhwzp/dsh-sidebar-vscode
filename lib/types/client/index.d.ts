@@ -1,49 +1,46 @@
 /**
- * Browser half of `dsh-sidebar-vscode`: registers one better-sidebar tab
- * ('dsh-sidebar-vscode:vscode') that embeds the VS Code web workbench
- * opened at the current session workspace, plus the composer-side
- * plumbing for VS Code selection references:
+ * Browser half of `dsh-sidebar-vscode`: a thin composition root over the
+ * OFFICIAL right-Sidebar system. The plugin's client-side mechanisms live
+ * in their own modules — the tab body (VscodeView.tsx and its
+ * controllers), the reference pipeline (references.ts / composer.tsx /
+ * referencePipeline.ts), the takeover family (takeovers.ts), the settings
+ * card (settingsCard.tsx) — and this entry only wires them to the
+ * services:
  *
+ * - the `vscode` tab type, registered in the official two stages: the
+ *   static definition into `ctx.sidebarRightTabs` (guide-page entry box
+ *   included) and the body into the keyed `sidebar.right.pane.tab` seat
+ *   under the definition's id — the embedded VS Code web workbench at the
+ *   session's workspace;
  * - an `@`-trigger source named 'vscode-reference' whose codec serializes
- *   this plugin's occurrence chips back to their canonical mention at submit
- *   (the input machine routes serialization by source name);
+ *   this plugin's occurrence chips back to their canonical mention at
+ *   submit (the input machine routes serialization by source name);
  * - a reference lander shared by the clipboard bridge (tab component) and
  *   the paste fallback (composer dock): payload → chips on the addressed
  *   session's composer, plain-text mention as the degraded path;
- * - a mention paster (composer dock) that recovers copied reference items —
- *   whitespace-mangled or canonical mention text — back into chips;
- * - the chat-open takeover (openIntercept.ts / turnTail.tsx): the
- *   produced-files row and the runtime's chat file-open funnel (the
- *   gateway-era `remote.session.openWorkspacePath` Host Remote, or the
- *   legacy `workspaces.openPath` client service) are rerouted so chat file
- *   clicks open inside the VSCode tab, gated by the same `openAsDefault`
- *   switch as the default-tab swap — except paths whose extension is on
- *   the open blocklist (openBlocklist.ts: Office/image/PDF types), which
- *   open in better-sidebar's built-in Files tab instead (its file viewers
- *   render those types; the stock Host opener only when that tab type is
- *   disabled);
- * - the settings-open takeover (settingsTakeover.ts): the settings page's
- *   「打开配置文件」button resolves the configuration file through this
- *   plugin's fenced node-half route and opens it inside the VSCode tab
- *   instead of the Host OS opener, gated by the same switch.
- *
- * When better-sidebar is absent (optional peer), tab registration silently
- * skips; the reference plumbing still works for the paste fallback.
+ * - the takeover family (takeovers.ts): the official
+ *   `ctx.sidebarRight.openResource` funnel, the collapsed column's expand
+ *   button, and the settings page's「打开配置文件」button rerouted into
+ *   the workbench tab, all behind the openAsDefault switch and the open
+ *   blocklist;
+ * - the configuration card (settingsCard.tsx) inside the official
+ *   设置 → 插件 → 插件配置 tab, keyed by the `vscode-sidebar` namespace
+ *   the Host half serves.
  *
  * @module dsh-sidebar-vscode/client
  */
-import type { TabDescriptor } from 'dsh-better-sidebar';
-/** Services required before mounting: the sidebar service, the slot registry
- * (the turn-tail claim), the locale service, the session registry, the
- * conversation input service, the trigger registry (chip serialization
- * routing), the client workspaces service (the openPath seam), and the
- * connection service (the settings.openDocument seam). */
+/** Services required before mounting: the official right-Sidebar's tab
+ * registry and navigation controller, the slot registry (the tab body,
+ * the composer dock, and the settings card seats), the locale service,
+ * the session registry, the conversation input service, the trigger
+ * registry (chip serialization routing), the settings scope (the
+ * `vscode-sidebar` namespace), and the connection service (the legacy
+ * settings.openDocument seam). */
 export declare const inject: string[];
-/** The tab descriptor this plugin registers. */
-export declare function vscodeTab(): TabDescriptor;
 /**
  * Client plugin body.
- * @param ctx - the client cordis context (sidebar + slots + locale + sessions
- * + conversation + inputTriggers services).
+ * @param ctx - the client cordis context (the official sidebar services +
+ * slots + locale + sessions + conversation + inputTriggers + settingsScope
+ * + connection).
  */
 export declare function apply(ctx: unknown): void;
